@@ -1,29 +1,3 @@
-/**
- * FitPico — 팀원 A: 센서 & 하드웨어 노드
- * =========================================
- * 파일: src/main_sensor.c
- *
- * 담당 센서
- *   - HC-SR04  : 초음파 거리 측정 → 푸시업 횟수 카운트
- *   - PIR      : 움직임 감지 → 운동 자동 시작/정지
- *   - DHT11    : 온도/습도 측정
- *   - 4×4 키패드: A=시작  D=정지  #=세트완료
- *   - LED      : 1회=짧은 점등  세트완료=3회 점멸  전체완료=5회 점멸
- *
- * MQTT publish 토픽
- *   fitpico/sensor/count    → {"mode":"pushup","reps":5,"sets":2,"active":true}
- *   fitpico/sensor/temp     → "23.5"
- *   fitpico/sensor/humidity → "55.0"
- *
- * 핀 배치 (config.h 참조)
- *   GP14=TRIG  GP15=ECHO  GP16=PIR  GP17=DHT11  GP18=LED
- *   GP2-5=Keypad Rows(OUT)   GP6-9=Keypad Cols(IN, 풀업)
- *
- * HC-SR04 센서 위치
- *   바닥에 위를 향하게 설치
- *   내려간 상태: 가슴 ~ 센서 12cm 이내
- *   올라온 상태: 가슴 ~ 센서 28cm 이상  → 1회 카운트
- */
 
 #include <stdio.h>
 #include <string.h>
