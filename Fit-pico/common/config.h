@@ -6,15 +6,15 @@
 
 // ─── MQTT 토픽 ──────────────────────────────────────────────────────────────
 #define TOPIC_COUNT       "fitpico/sensor/count"
-#define TOPIC_TEMP        "fitpico/sensor/temp"
-#define TOPIC_HUMIDITY    "fitpico/sensor/humidity"
+#define TOPIC_REST        "fitpico/sensor/rest"
+#define TOPIC_DAILY       "fitpico/sensor/daily"
+#define TOPIC_SPEED       "fitpico/sensor/speed"
 #define TOPIC_CONTROL     "fitpico/control"
 
 // ─── 핀 정의 (팀원 A — 센서 노드) ──────────────────────────────────────────
 #define HCSR04_TRIG_PIN   14
 #define HCSR04_ECHO_PIN   15
 #define PIR_PIN           16
-#define DHT11_PIN         17
 #define LED_PIN           18
 
 // 4×4 키패드: 행(출력) / 열(입력 풀업)
@@ -28,17 +28,16 @@
 #define KEYPAD_COL3       9
 
 // ─── 운동 파라미터 ───────────────────────────────────────────────────────────
-// ─── 푸시업 파라미터 ─────────────────────────────────────────────────────────
-// HC-SR04 센서를 바닥에 위를 향해 설치
-//   내려간 상태(가슴 근접) → 올라온 상태(팔 펴짐) = 1회
-#define PUSHUP_DOWN_CM      12.0f  // 내려간 기준 (cm)
-#define PUSHUP_UP_CM        28.0f  // 올라온 기준 (cm)
-#define REPS_PER_SET        10     // 한 세트 반복 횟수
-#define TARGET_SETS         3      // 목표 세트 수
-#define REST_BETWEEN_SET_MS 30000  // 세트 간 휴식 시간 (ms)
+#define PUSHUP_DOWN_CM        12.0f  // 내려간 기준 (cm)
+#define PUSHUP_UP_CM          28.0f  // 올라온 기준 (cm)
+#define REPS_PER_SET          10     // 한 세트 반복 횟수
+#define TARGET_SETS           3      // 목표 세트 수
 
-#define PIR_TIMEOUT_MS      30000  // PIR 무동작 자동 정지 타임아웃 (ms)
+#define PIR_TIMEOUT_MS        30000  // PIR 무동작 자동 정지 타임아웃 (ms)
+
+// ─── 운동 속도 기준 ──────────────────────────────────────────────────────────
+#define REP_TOO_FAST_MS       800    // 이보다 빠르면 너무 빠름 경고 (ms)
+#define REP_TOO_SLOW_MS       4000   // 이보다 느리면 너무 느림 경고 (ms)
 
 // ─── 주기 설정 ──────────────────────────────────────────────────────────────
-#define DHT_READ_INTERVAL_MS    5000   // DHT11 읽기 주기 (ms)
-#define MQTT_PUBLISH_INTERVAL_MS 2000  // MQTT publish 주기 (ms)
+#define MQTT_PUBLISH_INTERVAL_MS  2000  // MQTT publish 주기 (ms)

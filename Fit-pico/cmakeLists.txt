@@ -144,3 +144,58 @@ target_compile_definitions(fitpico_sensor PRIVATE
 pico_enable_stdio_usb(fitpico_sensor 1)
 pico_enable_stdio_uart(fitpico_sensor 0)
 pico_add_extra_outputs(fitpico_sensor)
+
+# ── 팀원 B: 디스플레이 노드 (SSD1306 I2C OLED) ────────────────────────────
+add_executable(fitpico_display
+    src/main_display.c
+)
+
+target_link_libraries(fitpico_display
+    pico_stdlib
+    hardware_i2c
+    pico_cyw43_arch_lwip_threadsafe_background
+    pico_lwip_mqtt
+)
+
+target_include_directories(fitpico_display PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/common
+    ${CMAKE_CURRENT_LIST_DIR}/src
+)
+
+target_compile_definitions(fitpico_display PRIVATE
+    WIFI_SSID=\"${WIFI_SSID}\"
+    WIFI_PASSWORD=\"${WIFI_PASSWORD}\"
+    MQTT_SERVER=\"${MQTT_SERVER}\"
+    PICO_STDIO_USB_CONNECT_WAIT_TIMEOUT_MS=3000
+)
+
+pico_enable_stdio_usb(fitpico_display 1)
+pico_enable_stdio_uart(fitpico_display 0)
+pico_add_extra_outputs(fitpico_display)
+
+# ── IoT 대시보드 노드 ───────────────────────────────────────────────────────
+add_executable(fitpico_dashboard
+    src/main_iot-dashboard.c
+)
+
+target_link_libraries(fitpico_dashboard
+    pico_stdlib
+    pico_cyw43_arch_lwip_threadsafe_background
+    pico_lwip_mqtt
+)
+
+target_include_directories(fitpico_dashboard PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/common
+    ${CMAKE_CURRENT_LIST_DIR}/src
+)
+
+target_compile_definitions(fitpico_dashboard PRIVATE
+    WIFI_SSID=\"${WIFI_SSID}\"
+    WIFI_PASSWORD=\"${WIFI_PASSWORD}\"
+    MQTT_SERVER=\"${MQTT_SERVER}\"
+    PICO_STDIO_USB_CONNECT_WAIT_TIMEOUT_MS=3000
+)
+
+pico_enable_stdio_usb(fitpico_dashboard 1)
+pico_enable_stdio_uart(fitpico_dashboard 0)
+pico_add_extra_outputs(fitpico_dashboard)

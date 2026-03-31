@@ -1,3 +1,24 @@
+/*
+ *   - HC-SR04  : 초음파 거리 측정 → 푸시업 횟수 카운트
+ *   - PIR      : 움직임 감지 → 운동 자동 시작/정지
+ *   - 4×4 키패드: A=시작  D=정지  #=세트완료
+ *   - LED      : 1회=짧은 점등  속도경고=2회  세트완료=3회  전체완료=5회
+ *
+ * MQTT publish 토픽
+ *   fitpico/sensor/count   → {"mode":"pushup","reps":5,"sets":2,"active":true}
+ *   fitpico/sensor/rest    → {"set":2,"rest_sec":45}
+ *   fitpico/sensor/speed   → {"rep":5,"speed_ms":1200,"warn":"ok"}
+ *   fitpico/sensor/daily   → {"total_reps":45,"total_sets":5}
+ *
+ * 핀 배치 (config.h 참조)
+ *   GP14=TRIG  GP15=ECHO  GP16=PIR  GP18=LED
+ *   GP2-5=Keypad Rows(OUT)   GP6-9=Keypad Cols(IN, 풀업)
+ *
+ * HC-SR04 센서 위치
+ *   바닥에 위를 향하게 설치
+ *   내려간 상태: 가슴 ~ 센서 12cm 이내
+ *   올라온 상태: 가슴 ~ 센서 28cm 이상  → 1회 카운트
+ */
 
 #include <stdio.h>
 #include <string.h>
@@ -25,16 +46,18 @@ typedef enum { POS_UP = 0, POS_DOWN = 1 } Position;
 static mqtt_client_t *g_mqtt_client = NULL;
 static bool           g_mqtt_ready  = false;
 
-static bool      g_active      = false;
-static int       g_reps        = 0;
-static int       g_sets        = 0;
-static uint32_t  g_set_end_ms  = 0;   // 세트 완료 시각 (휴식 추적)
+static bool      g_active       = false;
+static int       g_reps         = 0;
+static int       g_sets         = 0;
+static uint32_t  g_set_end_ms   = 0;   // 세트 완료 시각 (휴식 추적)
 
-static float     g_temp        = 0.0f;
-static float     g_humidity    = 0.0f;
+// 일일 누적 기록 (D키로 초기화되지 않음)
+static int       g_daily_reps   = 0;
+static int       g_daily_sets   = 0;
 
-static Position  g_pushup_pos  = POS_UP;
-static uint32_t  g_last_pir_ms = 0;
+static Position  g_pushup_pos   = POS_UP;
+static uint32_t  g_rep_down_ms  = 0;   // DOWN 진입 시각 (속도 측정)
+static uint32_t  g_last_pir_ms  = 0;
 
 // 키패드
 static const char KEYMAP[4][4] = {
@@ -73,50 +96,6 @@ static float hcsr04_read_cm(void) {
         if (time_us_32() - echo_start > 30000u) return -1.0f;
     }
     return (float)(time_us_32() - echo_start) / 58.0f;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// DHT11: 온도 / 습도 읽기 (bit-bang)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * @brief DHT11 40비트 데이터 읽기
- *   프로토콜: 18ms LOW → 응답(80µs L + 80µs H) → 40비트
- *   비트 판별: HIGH > 28µs → '1', 이하 → '0'
- * @return true: 성공, false: 체크섬 오류 또는 타임아웃
- */
-static bool dht11_read(float *temp, float *humidity) {
-    uint8_t data[5] = {0};
-
-    gpio_set_dir(DHT11_PIN, GPIO_OUT);
-    gpio_put(DHT11_PIN, 0);
-    sleep_ms(18);
-    gpio_put(DHT11_PIN, 1);
-    sleep_us(30);
-    gpio_set_dir(DHT11_PIN, GPIO_IN);
-    gpio_pull_up(DHT11_PIN);
-
-    uint32_t t = time_us_32();
-    while (gpio_get(DHT11_PIN))  { if (time_us_32() - t > 100u) return false; }
-    t = time_us_32();
-    while (!gpio_get(DHT11_PIN)) { if (time_us_32() - t > 100u) return false; }
-    t = time_us_32();
-    while (gpio_get(DHT11_PIN))  { if (time_us_32() - t > 100u) return false; }
-
-    for (int i = 0; i < 40; i++) {
-        t = time_us_32();
-        while (!gpio_get(DHT11_PIN)) { if (time_us_32() - t > 60u) return false; }
-        t = time_us_32();
-        while (gpio_get(DHT11_PIN))  { if (time_us_32() - t > 80u) return false; }
-        data[i / 8] <<= 1;
-        if (time_us_32() - t > 28u) data[i / 8] |= 1;
-    }
-
-    if (((data[0] + data[1] + data[2] + data[3]) & 0xFF) != data[4]) return false;
-
-    *humidity = (float)data[0] + (float)data[1] * 0.1f;
-    *temp     = (float)data[2] + (float)data[3] * 0.1f;
-    return true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -173,16 +152,13 @@ static void led_blink(int n) {
 
 /**
  * @brief 거리 값으로 푸시업 1회 완료 여부 판정
- *
- * 상태 머신:
- *   POS_UP → (cm < PUSHUP_DOWN_CM) → POS_DOWN
- *          → (cm > PUSHUP_UP_CM)   → POS_UP + 1 반환
- *
+ *   DOWN 진입 시각을 g_rep_down_ms에 기록 (속도 계산용)
  * @return 1: 1회 완료, 0: 대기 중
  */
-static int count_pushup_rep(float cm) {
+static int count_pushup_rep(float cm, uint32_t now_ms) {
     if (g_pushup_pos == POS_UP && cm < PUSHUP_DOWN_CM) {
         g_pushup_pos = POS_DOWN;
+        g_rep_down_ms = now_ms;
     } else if (g_pushup_pos == POS_DOWN && cm > PUSHUP_UP_CM) {
         g_pushup_pos = POS_UP;
         return 1;
@@ -242,19 +218,30 @@ static void mqtt_connect_broker(void) {
 // 키 입력 처리
 // ─────────────────────────────────────────────────────────────────────────────
 
-static void handle_key(char key) {
+static void handle_key(char key, uint32_t now_ms) {
+    char buf[64];
     switch (key) {
         case 'A':   // 시작 / 재시작
-            g_active      = true;
-            g_pushup_pos  = POS_UP;
+            // 세트 완료 후 재시작이면 휴식 시간 publish
+            if (g_set_end_ms > 0) {
+                uint32_t rest_sec = (now_ms - g_set_end_ms) / 1000;
+                snprintf(buf, sizeof(buf),
+                         "{\"set\":%d,\"rest_sec\":%lu}", g_sets, (unsigned long)rest_sec);
+                mqtt_send(TOPIC_REST, buf);
+                printf("[REST] 세트 %d 후 휴식: %lu초\n", g_sets, (unsigned long)rest_sec);
+                g_set_end_ms = 0;
+            }
+            g_active     = true;
+            g_pushup_pos = POS_UP;
             printf("[KEY] 푸시업 시작\n");
             led_blink(1);
             break;
 
-        case 'D':   // 정지 및 초기화
-            g_active = false;
-            g_reps   = 0;
-            g_sets   = 0;
+        case 'D':   // 정지 및 세션 초기화
+            g_active     = false;
+            g_reps       = 0;
+            g_sets       = 0;
+            g_set_end_ms = 0;
             printf("[KEY] 정지 및 초기화\n");
             led_blink(2);
             break;
@@ -262,7 +249,10 @@ static void handle_key(char key) {
         case '#':   // 세트 수동 완료
             if (g_active) {
                 g_sets++;
-                g_reps = 0;
+                g_daily_sets++;
+                g_reps       = 0;
+                g_set_end_ms = now_ms;
+                g_active     = false;
                 led_blink(3);
                 printf("[KEY] 세트 %d 수동 완료\n", g_sets);
             }
@@ -280,19 +270,20 @@ static void handle_key(char key) {
 static void publish_all(void) {
     char buf[128];
 
+    // 현재 세션 상태
     snprintf(buf, sizeof(buf),
              "{\"mode\":\"pushup\",\"reps\":%d,\"sets\":%d,\"active\":%s}",
              g_reps, g_sets, g_active ? "true" : "false");
     mqtt_send(TOPIC_COUNT, buf);
 
-    snprintf(buf, sizeof(buf), "%.1f", g_temp);
-    mqtt_send(TOPIC_TEMP, buf);
+    // 일일 누적 기록
+    snprintf(buf, sizeof(buf),
+             "{\"total_reps\":%d,\"total_sets\":%d}",
+             g_daily_reps, g_daily_sets);
+    mqtt_send(TOPIC_DAILY, buf);
 
-    snprintf(buf, sizeof(buf), "%.1f", g_humidity);
-    mqtt_send(TOPIC_HUMIDITY, buf);
-
-    printf("[MQTT] reps=%d sets=%d temp=%.1f hum=%.1f\n",
-           g_reps, g_sets, g_temp, g_humidity);
+    printf("[MQTT] reps=%d sets=%d | daily reps=%d sets=%d\n",
+           g_reps, g_sets, g_daily_reps, g_daily_sets);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -328,7 +319,6 @@ int main(void) {
         sleep_ms(1000);
     }
 
-    uint32_t last_dht_ms = 0;
     uint32_t last_pub_ms = 0;
 
     printf("\n준비 완료. A=시작  D=정지  #=세트완료\n");
@@ -341,7 +331,7 @@ int main(void) {
 
         // 키패드
         char key = keypad_scan();
-        if (key != '\0') handle_key(key);
+        if (key != '\0') handle_key(key, now);
 
         // PIR: 움직임 감지 → 자동 시작
         bool pir = (bool)gpio_get(PIR_PIN);
@@ -361,17 +351,39 @@ int main(void) {
             printf("[PIR] %d초간 움직임 없음 — 자동 정지\n", PIR_TIMEOUT_MS / 1000);
         }
 
-        // 푸시업 횟수 카운트
+        // 푸시업 횟수 카운트 + 속도 측정
         if (g_active) {
             float cm = hcsr04_read_cm();
-            if (cm > 0.0f && count_pushup_rep(cm)) {
+            if (cm > 0.0f && count_pushup_rep(cm, now)) {
                 g_reps++;
-                printf("[REP] 푸시업 %d회 (%.1fcm)\n", g_reps, cm);
+                g_daily_reps++;
 
-                gpio_put(LED_PIN, 1); sleep_ms(80); gpio_put(LED_PIN, 0);
+                uint32_t speed_ms = now - g_rep_down_ms;
+                const char *warn = "ok";
+                if (speed_ms < REP_TOO_FAST_MS)       warn = "fast";
+                else if (speed_ms > REP_TOO_SLOW_MS)  warn = "slow";
+
+                printf("[REP] 푸시업 %d회 (%.1fcm) 속도=%lums [%s]\n",
+                       g_reps, cm, (unsigned long)speed_ms, warn);
+
+                // 속도 publish
+                char buf[64];
+                snprintf(buf, sizeof(buf),
+                         "{\"rep\":%d,\"speed_ms\":%lu,\"warn\":\"%s\"}",
+                         g_reps, (unsigned long)speed_ms, warn);
+                mqtt_send(TOPIC_SPEED, buf);
+
+                // LED 피드백: 경고 시 2회, 정상 시 짧은 점등
+                if (warn[0] != 'o') {
+                    led_blink(2);
+                    printf("[SPEED] 속도 경고: %s\n", warn);
+                } else {
+                    gpio_put(LED_PIN, 1); sleep_ms(80); gpio_put(LED_PIN, 0);
+                }
 
                 if (g_reps >= REPS_PER_SET) {
                     g_sets++;
+                    g_daily_sets++;
                     g_reps       = 0;
                     g_set_end_ms = now;
                     g_active     = false;
@@ -384,16 +396,6 @@ int main(void) {
                     }
                 }
             }
-        }
-
-        // DHT11 온습도 (5초마다)
-        if (now - last_dht_ms > DHT_READ_INTERVAL_MS) {
-            float t, h;
-            if (dht11_read(&t, &h)) {
-                g_temp = t; g_humidity = h;
-                printf("[DHT11] %.1f°C  %.1f%%\n", t, h);
-            }
-            last_dht_ms = now;
         }
 
         // MQTT publish (2초마다)
