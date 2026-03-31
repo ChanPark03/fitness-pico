@@ -1,0 +1,16 @@
+cmake_minimum_required(VERSION 3.10)
+project(kuBig2026)
+
+set(CMAKE_CXX_STANDARD 17)
+
+
+
+ExternalProject_Add(pico_project
+	SOURCE_DIR ${CMAKE_SOURCE_DIR}/pico
+	BINARY_DIR ${CMAKE_BINARY_DIR}/pico-build
+	CMAKE_ARGS
+		-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+		-DPICO_SDK_PATH=${CMAKE_SOURCE_DIR}/pico/deps/pico-sdk
+	INSTALL_COMMAND ""
+)
