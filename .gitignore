@@ -1,0 +1,22 @@
+# 빌드 산출물
+Fit-pico/build/
+build/
+*.uf2
+*.elf
+*.bin
+*.map
+*.hex
+
+# Python
+__pycache__/
+*.pyc
+
+# 보안
+secrets.py
+*.env
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/settings.json
