@@ -1,0 +1,33 @@
+{
+    "configurations": [
+        {
+            "name": "Pico W (ARM)",
+            "compileCommands": "${workspaceFolder}/Fit-pico/build/compile_commands.json",
+            "includePath": [
+                "${workspaceFolder}/Fit-pico/common",
+                "${workspaceFolder}/Fit-pico/src",
+                "${workspaceFolder}/deps/pico-sdk/src/common/pico_stdlib/include",
+                "${workspaceFolder}/deps/pico-sdk/src/rp2_common/hardware_gpio/include",
+                "${workspaceFolder}/deps/pico-sdk/src/rp2_common/pico_cyw43_arch/include",
+                "${workspaceFolder}/deps/pico-sdk/src/common/pico_base/include",
+                "${workspaceFolder}/deps/pico-sdk/src/boards/include",
+                "${workspaceFolder}/deps/pico-sdk/src/rp2_common/pico_platform/include",
+                "${workspaceFolder}/deps/pico-sdk/src/rp2_common/hardware_base/include",
+                "${workspaceFolder}/deps/pico-sdk/src/rp2_common/hardware_timer/include",
+                "${workspaceFolder}/deps/pico-sdk/lib/lwip/src/include",
+                "${workspaceFolder}/deps/pico-sdk/src/rp2_common/pico_lwip/include",
+                "${workspaceFolder}/Fit-pico/build/generated/pico_base"
+            ],
+            "defines": [
+                "PICO_BOARD=\"pico2_w\"",
+                "PICO_RP2350=1",
+                "CYW43_WIFI_NVRAM_INCLUDED=1"
+            ],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "gcc-arm"
+        }
+    ],
+    "version": 4
+}
