@@ -25,7 +25,6 @@
 #include <stdlib.h>
 
 #include "pico/stdlib.h"
-#include "pico/stdio_usb.h"
 #include "pico/cyw43_arch.h"
 #include "hardware/gpio.h"
 
@@ -70,17 +69,6 @@ static const char KEYMAP[4][4] = {
 static const uint ROW_PINS[4] = {KEYPAD_ROW0, KEYPAD_ROW1, KEYPAD_ROW2, KEYPAD_ROW3};
 static const uint COL_PINS[4] = {KEYPAD_COL0, KEYPAD_COL1, KEYPAD_COL2, KEYPAD_COL3};
 
-static void wait_for_usb_serial(uint32_t timeout_ms) {
-    uint32_t start_ms = to_ms_since_boot(get_absolute_time());
-    while (!stdio_usb_connected()) {
-        uint32_t now_ms = to_ms_since_boot(get_absolute_time());
-        if ((now_ms - start_ms) >= timeout_ms) {
-            break;
-        }
-        sleep_ms(10);
-    }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // HC-SR04: 초음파 거리 측정
 // ─────────────────────────────────────────────────────────────────────────────
@@ -103,7 +91,7 @@ static float hcsr04_read_cm(void) {
     while (!gpio_get(HCSR04_ECHO_PIN)) {
         if (time_us_32() - t > 30000u) return -1.0f;
     }
-    uint32_t echo_start = time_us_32();
+    uint32_t echo_start = time_us_32(); 
     while (gpio_get(HCSR04_ECHO_PIN)) {
         if (time_us_32() - echo_start > 30000u) return -1.0f;
     }
@@ -271,7 +259,6 @@ static void handle_key(char key, uint32_t now_ms) {
             break;
 
         default:
-            printf("[KEYPAD] key=%c\n", key);
             break;
     }
 }
@@ -305,9 +292,7 @@ static void publish_all(void) {
 
 int main(void) {
     stdio_init_all();
-    setvbuf(stdout, NULL, _IONBF, 0);
-    wait_for_usb_serial(10000);
-    sleep_ms(250);
+    sleep_ms(2000);
 
     printf("=== FitPico Sensor Node (팀원 A) — 푸시업 ===\n");
     printf("브로커: %s:%d\n", MQTT_BROKER_IP, MQTT_BROKER_PORT);
@@ -335,15 +320,10 @@ int main(void) {
     }
 
     uint32_t last_pub_ms = 0;
-    uint32_t last_debug_ms = 0;
-    uint32_t last_sensor_diag_ms = 0;
 
     printf("\n준비 완료. A=시작  D=정지  #=세트완료\n");
     printf("목표: %d세트 x %d회  |  센서: 바닥에 위로 향하게 설치\n\n",
            TARGET_SETS, REPS_PER_SET);
-    printf("테스트 핀: HC-SR04 TRIG=%d ECHO=%d | PIR=%d | BUZZER=%d | KEY ROW=2,3,4,5 COL=6,7,8,9\n",
-           HCSR04_TRIG_PIN, HCSR04_ECHO_PIN, PIR_PIN, BUZZER_PIN);
-    printf("센서 테스트: 1초마다 거리/PIR 상태 출력, 키패드 입력 즉시 출력\n\n");
 
     while (true) {
         cyw43_arch_poll();
@@ -369,18 +349,6 @@ int main(void) {
             g_active      = false;
             g_last_pir_ms = 0;
             printf("[PIR] %d초간 움직임 없음 — 자동 정지\n", PIR_TIMEOUT_MS / 1000);
-        }
-
-        if (now - last_sensor_diag_ms > 1000) {
-            float cm = hcsr04_read_cm();
-            if (cm > 0.0f) {
-                printf("[SENSOR] distance=%.1fcm pir=%d active=%d reps=%d sets=%d\n",
-                       cm, pir, g_active, g_reps, g_sets);
-            } else {
-                printf("[SENSOR] distance=timeout pir=%d active=%d reps=%d sets=%d\n",
-                       pir, g_active, g_reps, g_sets);
-            }
-            last_sensor_diag_ms = now;
         }
 
         // 푸시업 횟수 카운트 + 속도 측정
@@ -434,12 +402,6 @@ int main(void) {
         if (g_mqtt_ready && (now - last_pub_ms > MQTT_PUBLISH_INTERVAL_MS)) {
             publish_all();
             last_pub_ms = now;
-        }
-
-        if (now - last_debug_ms > 5000) {
-            printf("[STATUS] active=%d reps=%d sets=%d mqtt=%d pir=%d\n",
-                   g_active, g_reps, g_sets, g_mqtt_ready, gpio_get(PIR_PIN));
-            last_debug_ms = now;
         }
 
         sleep_ms(50);
