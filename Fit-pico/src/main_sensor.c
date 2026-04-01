@@ -2,7 +2,7 @@
  *   - HC-SR04  : 초음파 거리 측정 → 푸시업 횟수 카운트
  *   - PIR      : 움직임 감지 → 운동 자동 시작/정지
  *   - 4×4 키패드: A=시작  D=정지  #=세트완료
- *   - LED      : 1회=짧은 점등  속도경고=2회  세트완료=3회  전체완료=5회
+ *   - Buzzer   : 1회=시작  속도경고=2회  세트완료=3회  전체완료=5회
  *
  * MQTT publish 토픽
  *   fitpico/sensor/count   → {"mode":"pushup","reps":5,"sets":2,"active":true}
@@ -11,7 +11,7 @@
  *   fitpico/sensor/daily   → {"total_reps":45,"total_sets":5}
  *
  * 핀 배치 (config.h 참조)
- *   GP14=TRIG  GP15=ECHO  GP16=PIR  GP18=LED
+ *   GP14=TRIG  GP15=ECHO  GP16=PIR  GP18=BUZZER
  *   GP2-5=Keypad Rows(OUT)   GP6-9=Keypad Cols(IN, 풀업)
  *
  * HC-SR04 센서 위치
@@ -136,13 +136,13 @@ static char keypad_scan(void) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LED 피드백
+// 부저 피드백
 // ─────────────────────────────────────────────────────────────────────────────
 
-static void led_blink(int n) {
+static void buzzer_beep(int n) {
     for (int i = 0; i < n; i++) {
-        gpio_put(LED_PIN, 1); sleep_ms(200);
-        gpio_put(LED_PIN, 0); sleep_ms(200);
+        gpio_put(BUZZER_PIN, 1); sleep_ms(100);
+        gpio_put(BUZZER_PIN, 0); sleep_ms(150);
     }
 }
 
@@ -234,7 +234,7 @@ static void handle_key(char key, uint32_t now_ms) {
             g_active     = true;
             g_pushup_pos = POS_UP;
             printf("[KEY] 푸시업 시작\n");
-            led_blink(1);
+            buzzer_beep(1);
             break;
 
         case 'D':   // 정지 및 세션 초기화
@@ -243,7 +243,7 @@ static void handle_key(char key, uint32_t now_ms) {
             g_sets       = 0;
             g_set_end_ms = 0;
             printf("[KEY] 정지 및 초기화\n");
-            led_blink(2);
+            buzzer_beep(2);
             break;
 
         case '#':   // 세트 수동 완료
@@ -253,7 +253,7 @@ static void handle_key(char key, uint32_t now_ms) {
                 g_reps       = 0;
                 g_set_end_ms = now_ms;
                 g_active     = false;
-                led_blink(3);
+                buzzer_beep(3);
                 printf("[KEY] 세트 %d 수동 완료\n", g_sets);
             }
             break;
@@ -302,8 +302,8 @@ int main(void) {
     gpio_put(HCSR04_TRIG_PIN, 0);
     gpio_init(HCSR04_ECHO_PIN); gpio_set_dir(HCSR04_ECHO_PIN, GPIO_IN);
     gpio_init(PIR_PIN);         gpio_set_dir(PIR_PIN, GPIO_IN);
-    gpio_init(LED_PIN);         gpio_set_dir(LED_PIN, GPIO_OUT);
-    gpio_put(LED_PIN, 0);
+    gpio_init(BUZZER_PIN);       gpio_set_dir(BUZZER_PIN, GPIO_OUT);
+    gpio_put(BUZZER_PIN, 0);
     keypad_init();
 
     // WiFi 초기화
@@ -373,12 +373,12 @@ int main(void) {
                          g_reps, (unsigned long)speed_ms, warn);
                 mqtt_send(TOPIC_SPEED, buf);
 
-                // LED 피드백: 경고 시 2회, 정상 시 짧은 점등
+                // 부저 피드백: 경고 시 2회, 정상 시 짧은 1회
                 if (warn[0] != 'o') {
-                    led_blink(2);
+                    buzzer_beep(2);
                     printf("[SPEED] 속도 경고: %s\n", warn);
                 } else {
-                    gpio_put(LED_PIN, 1); sleep_ms(80); gpio_put(LED_PIN, 0);
+                    buzzer_beep(1);
                 }
 
                 if (g_reps >= REPS_PER_SET) {
@@ -387,12 +387,12 @@ int main(void) {
                     g_reps       = 0;
                     g_set_end_ms = now;
                     g_active     = false;
-                    led_blink(3);
+                    buzzer_beep(3);
                     printf("[SET] %d/%d 세트 완료! A키로 다음 세트 시작\n",
                            g_sets, TARGET_SETS);
                     if (g_sets >= TARGET_SETS) {
                         printf("[DONE] 목표 달성! 수고하셨습니다.\n");
-                        led_blink(5);
+                        buzzer_beep(5);
                     }
                 }
             }

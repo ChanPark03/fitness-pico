@@ -15,7 +15,7 @@
 #define HCSR04_TRIG_PIN   14
 #define HCSR04_ECHO_PIN   15
 #define PIR_PIN           16
-#define LED_PIN           18
+#define BUZZER_PIN        18
 
 // 4×4 키패드: 행(출력) / 열(입력 풀업)
 #define KEYPAD_ROW0       2
