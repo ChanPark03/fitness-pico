@@ -54,14 +54,18 @@
                 "${workspaceFolder}/deps/pico-sdk/src/rp2_common/pico_printf/include",
                 "${workspaceFolder}/deps/pico-sdk/lib/lwip/src/include",
                 "${workspaceFolder}/deps/pico-sdk/lib/cyw43-driver/src",
-                "${workspaceFolder}/deps/pico-sdk/src/boards/include"
+                "${workspaceFolder}/deps/pico-sdk/src/boards/include",
+                "/Applications/ArmGNUToolchain/15.2.rel1/arm-none-eabi/arm-none-eabi/include",
+                "/Applications/ArmGNUToolchain/15.2.rel1/arm-none-eabi/lib/gcc/arm-none-eabi/15.2.1/include"
             ],
             "defines": [
                 "PICO_BOARD=\"pico2_w\"",
                 "PICO_RP2350=1",
-                "CYW43_WIFI_NVRAM_INCLUDED=1"
+                "CYW43_WIFI_NVRAM_INCLUDED=1",
+                "WIFI_SSID=\"bindsoft\"",
+                "WIFI_PASSWORD=\"bindsoft24\""
             ],
-            "compilerPath": "/usr/bin/gcc",
+            "compilerPath": "/opt/homebrew/bin/arm-none-eabi-gcc",
             "cStandard": "c11",
             "cppStandard": "c++17",
             "intelliSenseMode": "gcc-arm"
