@@ -5,17 +5,20 @@
 #define MQTT_BROKER_PORT  1883
 
 // ─── MQTT 토픽 ──────────────────────────────────────────────────────────────
-#define TOPIC_COUNT       "fitpico/sensor/count"
-#define TOPIC_REST        "fitpico/sensor/rest"
-#define TOPIC_DAILY       "fitpico/sensor/daily"
-#define TOPIC_SPEED       "fitpico/sensor/speed"
-#define TOPIC_CONTROL     "fitpico/control"
+#define TOPIC_COUNT          "fitpico/sensor/count"
+#define TOPIC_REST           "fitpico/sensor/rest"
+#define TOPIC_DAILY          "fitpico/sensor/daily"
+#define TOPIC_SPEED          "fitpico/sensor/speed"
+#define TOPIC_CONTROL        "fitpico/control"
+
+// 보드 heartbeat / 상태 토픽
+#define TOPIC_SENSOR_STATUS  "fitpico/sensor/status"
+#define TOPIC_DISPLAY_STATUS "fitpico/display/status"
 
 // ─── 핀 정의 (팀원 A — 센서 노드) ──────────────────────────────────────────
 #define HCSR04_TRIG_PIN   14
 #define HCSR04_ECHO_PIN   15
 #define PIR_PIN           16
-#define BUZZER_PIN        18
 
 // 4×4 키패드: 행(출력) / 열(입력 풀업)
 #define KEYPAD_ROW0       2
@@ -28,6 +31,7 @@
 #define KEYPAD_COL3       9
 
 // ─── 디스플레이 보드 WS2812 상태등 ────────────────────────────────────────
+#define BUZZER_PIN            18    // 디스플레이 보드 버저 핀
 #define WS2812_PIN            12    // 디스플레이 보드 RGB strip 데이터 핀
 #define WS2812_LED_COUNT      8     // 연결한 LED 개수에 맞게 조정
 #define WS2812_IS_RGBW        0
@@ -45,4 +49,6 @@
 #define REP_TOO_SLOW_MS       4000   // 이보다 느리면 너무 느림 경고 (ms)
 
 // ─── 주기 설정 ──────────────────────────────────────────────────────────────
-#define MQTT_PUBLISH_INTERVAL_MS  2000  // MQTT publish 주기 (ms)
+#define MQTT_PUBLISH_INTERVAL_MS     2000  // MQTT publish 주기 (ms)
+#define DEVICE_HEARTBEAT_INTERVAL_MS 3000  // 각 보드 heartbeat 전송 주기
+#define BOARD_OFFLINE_TIMEOUT_MS     8000  // heartbeat 미수신 시 오프라인 판정 기준

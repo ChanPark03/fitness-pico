@@ -1,11 +1,12 @@
 {
     "cmake.cmakePath": "/opt/homebrew/bin/cmake",
     "cmake.sourceDirectory": "${workspaceFolder}/Fit-pico",
-    "cmake.buildDirectory": "${workspaceFolder}/Fit-pico/build",
+    "cmake.buildDirectory": "${workspaceFolder}/build/sensor",
     "cmake.configureSettings": {
         "PICO_SDK_PATH": "${workspaceFolder}/deps/pico-sdk",
         "PICO_BOARD": "pico2_w",
-        "PICO_TOOLCHAIN_PATH": "/opt/homebrew/bin"
+        "PICO_TOOLCHAIN_PATH": "/opt/homebrew/bin",
+        "PICOTOOL_FETCH_FROM_GIT_PATH": "${workspaceFolder}/.pico-tools"
     },
-    "C_Cpp.default.compileCommands": "${workspaceFolder}/Fit-pico/build/compile_commands.json"
+    "C_Cpp.default.compileCommands": "/Users/chanpark/fitness-pico/build/sensor/compile_commands.json"
 }

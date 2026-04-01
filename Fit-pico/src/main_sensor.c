@@ -2,8 +2,6 @@
  *   - HC-SR04  : 초음파 거리 측정 → 푸시업 횟수 카운트
  *   - PIR      : 움직임 감지 → 운동 자동 시작/정지
  *   - 4×4 키패드: A=시작  D=정지  #=세트완료
- *   - Buzzer   : 1회=시작  속도경고=2회  세트완료=3회  전체완료=5회
- *
  * MQTT publish 토픽
  *   fitpico/sensor/count   → {"mode":"pushup","reps":5,"sets":2,"active":true}
  *   fitpico/sensor/rest    → {"set":2,"rest_sec":45}
@@ -11,7 +9,7 @@
  *   fitpico/sensor/daily   → {"total_reps":45,"total_sets":5}
  *
  * 핀 배치 (config.h 참조)
- *   GP14=TRIG  GP15=ECHO  GP16=PIR  GP18=BUZZER
+ *   GP14=TRIG  GP15=ECHO  GP16=PIR
  *   GP2-5=Keypad Rows(OUT)   GP6-9=Keypad Cols(IN, 풀업)
  *
  * HC-SR04 센서 위치
@@ -69,6 +67,23 @@ static const char KEYMAP[4][4] = {
 static const uint ROW_PINS[4] = {KEYPAD_ROW0, KEYPAD_ROW1, KEYPAD_ROW2, KEYPAD_ROW3};
 static const uint COL_PINS[4] = {KEYPAD_COL0, KEYPAD_COL1, KEYPAD_COL2, KEYPAD_COL3};
 
+static const uint32_t WIFI_AUTH_MODES[] = {
+    CYW43_AUTH_WPA2_AES_PSK,
+    CYW43_AUTH_WPA2_MIXED_PSK,
+    CYW43_AUTH_WPA3_WPA2_AES_PSK,
+};
+
+static const char *const WIFI_AUTH_NAMES[] = {
+    "WPA2_AES",
+    "WPA2_MIXED",
+    "WPA3_WPA2",
+};
+
+typedef struct periodic_state {
+    uint32_t last_publish_ms;
+    uint32_t last_heartbeat_ms;
+} periodic_state_t;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // HC-SR04: 초음파 거리 측정
 // ─────────────────────────────────────────────────────────────────────────────
@@ -91,7 +106,7 @@ static float hcsr04_read_cm(void) {
     while (!gpio_get(HCSR04_ECHO_PIN)) {
         if (time_us_32() - t > 30000u) return -1.0f;
     }
-    uint32_t echo_start = time_us_32(); 
+    uint32_t echo_start = time_us_32();
     while (gpio_get(HCSR04_ECHO_PIN)) {
         if (time_us_32() - echo_start > 30000u) return -1.0f;
     }
@@ -135,15 +150,8 @@ static char keypad_scan(void) {
     return '\0';
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 부저 피드백
-// ─────────────────────────────────────────────────────────────────────────────
-
-static void buzzer_beep(int n) {
-    for (int i = 0; i < n; i++) {
-        gpio_put(BUZZER_PIN, 1); sleep_ms(100);
-        gpio_put(BUZZER_PIN, 0); sleep_ms(150);
-    }
+static uint32_t now_ms(void) {
+    return to_ms_since_boot(get_absolute_time());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -193,6 +201,22 @@ static void mqtt_send(const char *topic, const char *payload) {
                  (uint16_t)strlen(payload), 0, 0, mqtt_pub_cb, NULL);
 }
 
+static bool connect_wifi_with_fallbacks(void) {
+    for (size_t i = 0; i < sizeof(WIFI_AUTH_MODES) / sizeof(WIFI_AUTH_MODES[0]); i++) {
+        printf("[WiFi] %s 연결 시도...\n", WIFI_AUTH_NAMES[i]);
+        int err = cyw43_arch_wifi_connect_timeout_ms(
+            WIFI_SSID, WIFI_PASSWORD, WIFI_AUTH_MODES[i], 15000
+        );
+        if (err == 0) {
+            printf("[WiFi] 연결 성공 (%s)\n", WIFI_AUTH_NAMES[i]);
+            return true;
+        }
+        printf("[WiFi] 연결 실패 (%s, err=%d)\n", WIFI_AUTH_NAMES[i], err);
+        sleep_ms(500);
+    }
+    return false;
+}
+
 static void mqtt_connect_broker(void) {
     ip_addr_t broker;
     if (!ip4addr_aton(MQTT_BROKER_IP, &broker)) {
@@ -212,6 +236,20 @@ static void mqtt_connect_broker(void) {
     err_t err = mqtt_client_connect(g_mqtt_client, &broker, MQTT_BROKER_PORT,
                                     mqtt_connection_cb, NULL, &ci);
     if (err != ERR_OK) printf("[MQTT] 연결 요청 실패: %d\n", err);
+}
+
+static void init_sensor_gpio(void) {
+    gpio_init(HCSR04_TRIG_PIN);
+    gpio_set_dir(HCSR04_TRIG_PIN, GPIO_OUT);
+    gpio_put(HCSR04_TRIG_PIN, 0);
+
+    gpio_init(HCSR04_ECHO_PIN);
+    gpio_set_dir(HCSR04_ECHO_PIN, GPIO_IN);
+
+    gpio_init(PIR_PIN);
+    gpio_set_dir(PIR_PIN, GPIO_IN);
+
+    keypad_init();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -234,7 +272,6 @@ static void handle_key(char key, uint32_t now_ms) {
             g_active     = true;
             g_pushup_pos = POS_UP;
             printf("[KEY] 푸시업 시작\n");
-            buzzer_beep(1);
             break;
 
         case 'D':   // 정지 및 세션 초기화
@@ -243,7 +280,6 @@ static void handle_key(char key, uint32_t now_ms) {
             g_sets       = 0;
             g_set_end_ms = 0;
             printf("[KEY] 정지 및 초기화\n");
-            buzzer_beep(2);
             break;
 
         case '#':   // 세트 수동 완료
@@ -253,7 +289,6 @@ static void handle_key(char key, uint32_t now_ms) {
                 g_reps       = 0;
                 g_set_end_ms = now_ms;
                 g_active     = false;
-                buzzer_beep(3);
                 printf("[KEY] 세트 %d 수동 완료\n", g_sets);
             }
             break;
@@ -263,27 +298,124 @@ static void handle_key(char key, uint32_t now_ms) {
     }
 }
 
+static void handle_pir_activity(uint32_t now_ms) {
+    bool pir = (bool)gpio_get(PIR_PIN);
+    if (pir) {
+        g_last_pir_ms = now_ms;
+        if (!g_active) {
+            g_active = true;
+            printf("[PIR] 움직임 감지 — 자동 시작\n");
+        }
+    }
+
+    if (g_active && g_last_pir_ms > 0 &&
+        (now_ms - g_last_pir_ms) > PIR_TIMEOUT_MS) {
+        g_active = false;
+        g_last_pir_ms = 0;
+        printf("[PIR] %d초간 움직임 없음 — 자동 정지\n", PIR_TIMEOUT_MS / 1000);
+    }
+}
+
+static void publish_speed_result(uint32_t speed_ms, const char *warn) {
+    char buf[64];
+    snprintf(buf, sizeof(buf),
+             "{\"rep\":%d,\"speed_ms\":%lu,\"warn\":\"%s\"}",
+             g_reps, (unsigned long)speed_ms, warn);
+    mqtt_send(TOPIC_SPEED, buf);
+}
+
+static void handle_pushup_detection(uint32_t now_ms) {
+    if (!g_active) return;
+
+    float cm = hcsr04_read_cm();
+    if (cm <= 0.0f || !count_pushup_rep(cm, now_ms)) return;
+
+    g_reps++;
+    g_daily_reps++;
+
+    uint32_t speed_ms = now_ms - g_rep_down_ms;
+    const char *warn = "ok";
+    if (speed_ms < REP_TOO_FAST_MS) warn = "fast";
+    else if (speed_ms > REP_TOO_SLOW_MS) warn = "slow";
+
+    printf("[REP] 푸시업 %d회 (%.1fcm) 속도=%lums [%s]\n",
+           g_reps, cm, (unsigned long)speed_ms, warn);
+    publish_speed_result(speed_ms, warn);
+    if (warn[0] != 'o') {
+        printf("[SPEED] 속도 경고: %s\n", warn);
+    }
+
+    if (g_reps < REPS_PER_SET) return;
+
+    g_sets++;
+    g_daily_sets++;
+    g_reps = 0;
+    g_set_end_ms = now_ms;
+    g_active = false;
+    printf("[SET] %d/%d 세트 완료! A키로 다음 세트 시작\n", g_sets, TARGET_SETS);
+
+    if (g_sets >= TARGET_SETS) {
+        printf("[DONE] 목표 달성! 수고하셨습니다.\n");
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MQTT 데이터 전송
 // ─────────────────────────────────────────────────────────────────────────────
 
-static void publish_all(void) {
+static void publish_session_state(void) {
     char buf[128];
-
-    // 현재 세션 상태
     snprintf(buf, sizeof(buf),
              "{\"mode\":\"pushup\",\"reps\":%d,\"sets\":%d,\"active\":%s}",
              g_reps, g_sets, g_active ? "true" : "false");
     mqtt_send(TOPIC_COUNT, buf);
+}
 
-    // 일일 누적 기록
+static void publish_daily_totals(void) {
+    char buf[96];
     snprintf(buf, sizeof(buf),
              "{\"total_reps\":%d,\"total_sets\":%d}",
              g_daily_reps, g_daily_sets);
     mqtt_send(TOPIC_DAILY, buf);
+}
 
+static void publish_all(void) {
+    publish_session_state();
+    publish_daily_totals();
     printf("[MQTT] reps=%d sets=%d | daily reps=%d sets=%d\n",
            g_reps, g_sets, g_daily_reps, g_daily_sets);
+}
+
+static void publish_heartbeat(void) {
+    char buf[128];
+    snprintf(buf, sizeof(buf),
+             "{\"device\":\"sensor\",\"online\":true,\"active\":%s,\"reps\":%d,\"sets\":%d}",
+             g_active ? "true" : "false", g_reps, g_sets);
+    mqtt_send(TOPIC_SENSOR_STATUS, buf);
+}
+
+static void publish_periodic_updates(uint32_t current_ms, periodic_state_t *state) {
+    if (!g_mqtt_ready) return;
+
+    if ((current_ms - state->last_publish_ms) > MQTT_PUBLISH_INTERVAL_MS) {
+        publish_all();
+        state->last_publish_ms = current_ms;
+    }
+
+    if ((current_ms - state->last_heartbeat_ms) > DEVICE_HEARTBEAT_INTERVAL_MS) {
+        publish_heartbeat();
+        state->last_heartbeat_ms = current_ms;
+    }
+}
+
+static void poll_inputs_and_motion(uint32_t current_ms) {
+    char key = keypad_scan();
+    if (key != '\0') {
+        handle_key(key, current_ms);
+    }
+
+    handle_pir_activity(current_ms);
+    handle_pushup_detection(current_ms);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -297,21 +429,15 @@ int main(void) {
     printf("=== FitPico Sensor Node (팀원 A) — 푸시업 ===\n");
     printf("브로커: %s:%d\n", MQTT_BROKER_IP, MQTT_BROKER_PORT);
 
-    // GPIO 초기화
-    gpio_init(HCSR04_TRIG_PIN); gpio_set_dir(HCSR04_TRIG_PIN, GPIO_OUT);
-    gpio_put(HCSR04_TRIG_PIN, 0);
-    gpio_init(HCSR04_ECHO_PIN); gpio_set_dir(HCSR04_ECHO_PIN, GPIO_IN);
-    gpio_init(PIR_PIN);         gpio_set_dir(PIR_PIN, GPIO_IN);
-    gpio_init(BUZZER_PIN);       gpio_set_dir(BUZZER_PIN, GPIO_OUT);
-    gpio_put(BUZZER_PIN, 0);
-    keypad_init();
+    init_sensor_gpio();
 
-    // WiFi 초기화
-    if (cyw43_arch_init()) { printf("[WiFi] 초기화 실패\n"); return 1; }
+    if (cyw43_arch_init()) {
+        printf("[WiFi] 초기화 실패\n");
+        return 1;
+    }
     cyw43_arch_enable_sta_mode();
     printf("[WiFi] %s 연결 중...\n", WIFI_SSID);
-    if (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASSWORD,
-                                           CYW43_AUTH_WPA2_AES_PSK, 15000)) {
+    if (!connect_wifi_with_fallbacks()) {
         printf("[WiFi] 연결 실패 — MQTT 비활성\n");
     } else {
         printf("[WiFi] 연결 완료\n");
@@ -319,7 +445,7 @@ int main(void) {
         sleep_ms(1000);
     }
 
-    uint32_t last_pub_ms = 0;
+    periodic_state_t periodic = {0};
 
     printf("\n준비 완료. A=시작  D=정지  #=세트완료\n");
     printf("목표: %d세트 x %d회  |  센서: 바닥에 위로 향하게 설치\n\n",
@@ -327,82 +453,10 @@ int main(void) {
 
     while (true) {
         cyw43_arch_poll();
-        uint32_t now = to_ms_since_boot(get_absolute_time());
+        uint32_t current_ms = now_ms();
 
-        // 키패드
-        char key = keypad_scan();
-        if (key != '\0') handle_key(key, now);
-
-        // PIR: 움직임 감지 → 자동 시작
-        bool pir = (bool)gpio_get(PIR_PIN);
-        if (pir) {
-            g_last_pir_ms = now;
-            if (!g_active) {
-                g_active = true;
-                printf("[PIR] 움직임 감지 — 자동 시작\n");
-            }
-        }
-
-        // PIR: 30초 무동작 → 자동 정지
-        if (g_active && g_last_pir_ms > 0 &&
-            (now - g_last_pir_ms) > PIR_TIMEOUT_MS) {
-            g_active      = false;
-            g_last_pir_ms = 0;
-            printf("[PIR] %d초간 움직임 없음 — 자동 정지\n", PIR_TIMEOUT_MS / 1000);
-        }
-
-        // 푸시업 횟수 카운트 + 속도 측정
-        if (g_active) {
-            float cm = hcsr04_read_cm();
-            if (cm > 0.0f && count_pushup_rep(cm, now)) {
-                g_reps++;
-                g_daily_reps++;
-
-                uint32_t speed_ms = now - g_rep_down_ms;
-                const char *warn = "ok";
-                if (speed_ms < REP_TOO_FAST_MS)       warn = "fast";
-                else if (speed_ms > REP_TOO_SLOW_MS)  warn = "slow";
-
-                printf("[REP] 푸시업 %d회 (%.1fcm) 속도=%lums [%s]\n",
-                       g_reps, cm, (unsigned long)speed_ms, warn);
-
-                // 속도 publish
-                char buf[64];
-                snprintf(buf, sizeof(buf),
-                         "{\"rep\":%d,\"speed_ms\":%lu,\"warn\":\"%s\"}",
-                         g_reps, (unsigned long)speed_ms, warn);
-                mqtt_send(TOPIC_SPEED, buf);
-
-                // 부저 피드백: 경고 시 2회, 정상 시 짧은 1회
-                if (warn[0] != 'o') {
-                    buzzer_beep(2);
-                    printf("[SPEED] 속도 경고: %s\n", warn);
-                } else {
-                    buzzer_beep(1);
-                }
-
-                if (g_reps >= REPS_PER_SET) {
-                    g_sets++;
-                    g_daily_sets++;
-                    g_reps       = 0;
-                    g_set_end_ms = now;
-                    g_active     = false;
-                    buzzer_beep(3);
-                    printf("[SET] %d/%d 세트 완료! A키로 다음 세트 시작\n",
-                           g_sets, TARGET_SETS);
-                    if (g_sets >= TARGET_SETS) {
-                        printf("[DONE] 목표 달성! 수고하셨습니다.\n");
-                        buzzer_beep(5);
-                    }
-                }
-            }
-        }
-
-        // MQTT publish (2초마다)
-        if (g_mqtt_ready && (now - last_pub_ms > MQTT_PUBLISH_INTERVAL_MS)) {
-            publish_all();
-            last_pub_ms = now;
-        }
+        poll_inputs_and_motion(current_ms);
+        publish_periodic_updates(current_ms, &periodic);
 
         sleep_ms(50);
     }

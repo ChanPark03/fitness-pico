@@ -47,6 +47,7 @@ endif()
 
 
 # ── 팀원 A: 센서 노드 ──────────────────────────────────────────────────────
+# 센싱 + MQTT publish 전용
 add_executable(fitpico_sensor
     src/main_sensor.c
 )
@@ -74,11 +75,12 @@ pico_enable_stdio_usb(fitpico_sensor 1)
 pico_enable_stdio_uart(fitpico_sensor 0)
 pico_add_extra_outputs(fitpico_sensor)
 
-# ── 팀원 B: 디스플레이 노드 (SSD1306 I2C OLED) ────────────────────────────
+# ── 팀원 B: 디스플레이 노드 (I2C LCD + WS2812) ────────────────────────────
 add_executable(fitpico_display
     src/main_display.c
 )
 
+# WS2812는 PIO 프로그램이 필요하므로 전용 헤더를 생성한다.
 pico_generate_pio_header(fitpico_display
     ${PICO_SDK_PATH}/src/rp2_common/pico_status_led/ws2812.pio
 )
@@ -108,6 +110,7 @@ pico_enable_stdio_uart(fitpico_display 0)
 pico_add_extra_outputs(fitpico_display)
 
 # ── IoT 대시보드 노드 ───────────────────────────────────────────────────────
+# MQTT 수신 + HTTP 서버 + mDNS(.local) 광고
 add_executable(fitpico_dashboard
     src/main_iot-dashboard.c
 )

@@ -2,10 +2,11 @@
     "configurations": [
         {
             "name": "Pico W (ARM)",
-            "compileCommands": "${workspaceFolder}/Fit-pico/build/compile_commands.json",
+            "compileCommands": "/Users/chanpark/fitness-pico/build/sensor/compile_commands.json",
             "includePath": [
                 "${workspaceFolder}/Fit-pico/common",
                 "${workspaceFolder}/Fit-pico/src",
+                "${workspaceFolder}/build/sensor",
                 "${workspaceFolder}/Fit-pico/build/generated/pico_base",
                 "${workspaceFolder}/deps/pico-sdk/src/common/pico_base_headers/include",
                 "${workspaceFolder}/deps/pico-sdk/src/common/pico_stdlib_headers/include",

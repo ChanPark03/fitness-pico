@@ -8,10 +8,12 @@
  *   fitpico/sensor/count   → reps, sets, active
  *   fitpico/sensor/speed   → speed_ms, warn
  *   fitpico/sensor/daily   → total_reps, total_sets
+ *   fitpico/sensor/rest    → set, rest_sec
  *
  * 핀 배치
  *   GP4 = SDA (I2C0)
  *   GP5 = SCL (I2C0)
+ *   GP18 = Buzzer
  *   PCF8574 I2C 주소 = 0x27  (점퍼 A0~A2 모두 High; 0x3F 이면 아래 수정)
  */
 
@@ -21,6 +23,7 @@
 
 #include "pico/stdlib.h"
 #include "pico/cyw43_arch.h"
+#include "hardware/gpio.h"
 #include "hardware/i2c.h"
 #include "hardware/pio.h"
 
@@ -137,9 +140,12 @@ static int  g_reps        = 0;
 static int  g_sets        = 0;
 static bool g_active      = false;
 static int  g_speed_ms    = 0;
+static int  g_speed_rep   = 0;
 static char g_warn[8]     = "---";
 static int  g_daily_reps  = 0;
 static int  g_daily_sets  = 0;
+static int  g_rest_set    = 0;
+static int  g_rest_sec    = 0;
 
 static bool g_dirty = true;
 static bool g_wifi_ready = false;
@@ -147,6 +153,33 @@ static bool g_wifi_ready = false;
 static PIO  g_ws2812_pio    = pio0;
 static int  g_ws2812_sm     = -1;
 static bool g_ws2812_ready  = false;
+
+static const uint32_t WIFI_AUTH_MODES[] = {
+    CYW43_AUTH_WPA2_AES_PSK,
+    CYW43_AUTH_WPA2_MIXED_PSK,
+    CYW43_AUTH_WPA3_WPA2_AES_PSK,
+};
+
+static const char *const WIFI_AUTH_NAMES[] = {
+    "WPA2_AES",
+    "WPA2_MIXED",
+    "WPA3_WPA2",
+};
+
+typedef struct display_state {
+    int reps;
+    int sets;
+    bool active;
+    int speed_ms;
+    const char *warn;
+    int daily_reps;
+} display_state_t;
+
+typedef struct session_snapshot {
+    int reps;
+    int sets;
+    bool active;
+} session_snapshot_t;
 
 static void put_pixel(uint32_t pixel_grb) {
     if (!g_ws2812_ready) return;
@@ -205,6 +238,89 @@ static void update_status_led(void) {
     ws2812_fill(0, 0, 180);
 }
 
+static void init_lcd_bus(void) {
+    i2c_init(LCD_I2C, 100000);
+    gpio_set_function(LCD_SDA, GPIO_FUNC_I2C);
+    gpio_set_function(LCD_SCL, GPIO_FUNC_I2C);
+    gpio_pull_up(LCD_SDA);
+    gpio_pull_up(LCD_SCL);
+
+    lcd_init();
+}
+
+static void init_display_outputs(void) {
+    ws2812_init_strip();
+
+    gpio_init(BUZZER_PIN);
+    gpio_set_dir(BUZZER_PIN, GPIO_OUT);
+    gpio_put(BUZZER_PIN, 0);
+
+    init_lcd_bus();
+}
+
+static display_state_t current_display_state(void) {
+    display_state_t state = {
+        .reps = g_reps,
+        .sets = g_sets,
+        .active = g_active,
+        .speed_ms = g_speed_ms,
+        .warn = g_warn,
+        .daily_reps = g_daily_reps,
+    };
+    return state;
+}
+
+static session_snapshot_t current_session_snapshot(void) {
+    session_snapshot_t snapshot = {
+        .reps = g_reps,
+        .sets = g_sets,
+        .active = g_active,
+    };
+    return snapshot;
+}
+
+static void mqtt_send(const char *topic, const char *payload) {
+    if (!g_mqtt_ready || !g_mqtt_client) return;
+    mqtt_publish(g_mqtt_client, topic, payload,
+                 (uint16_t)strlen(payload), 0, 0, NULL, NULL);
+}
+
+static void buzzer_beep(int count) {
+    for (int i = 0; i < count; i++) {
+        gpio_put(BUZZER_PIN, 1);
+        sleep_ms(100);
+        gpio_put(BUZZER_PIN, 0);
+        sleep_ms(150);
+    }
+}
+
+static bool connect_wifi_with_fallbacks(void) {
+    for (size_t i = 0; i < sizeof(WIFI_AUTH_MODES) / sizeof(WIFI_AUTH_MODES[0]); i++) {
+        printf("[WiFi] %s 연결 시도...\n", WIFI_AUTH_NAMES[i]);
+        int err = cyw43_arch_wifi_connect_timeout_ms(
+            WIFI_SSID, WIFI_PASSWORD, WIFI_AUTH_MODES[i], 15000
+        );
+        if (err == 0) {
+            printf("[WiFi] 연결 성공 (%s)\n", WIFI_AUTH_NAMES[i]);
+            return true;
+        }
+        printf("[WiFi] 연결 실패 (%s, err=%d)\n", WIFI_AUTH_NAMES[i], err);
+        sleep_ms(500);
+    }
+    return false;
+}
+
+static void publish_display_heartbeat(void) {
+    char buf[160];
+    snprintf(buf, sizeof(buf),
+             "{\"device\":\"display\",\"online\":true,\"wifi\":%s,\"mqtt\":%s,\"active\":%s,\"warn\":\"%s\"}",
+             g_wifi_ready ? "true" : "false",
+             g_mqtt_ready ? "true" : "false",
+             g_active ? "true" : "false",
+             g_warn);
+    mqtt_send(TOPIC_DISPLAY_STATUS, buf);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // JSON 파싱 헬퍼
 // ─────────────────────────────────────────────────────────────────────────────
@@ -242,6 +358,31 @@ static bool json_bool(const char *json, const char *key, bool default_value) {
     return default_value;
 }
 
+static void handle_session_output(session_snapshot_t previous,
+                                  session_snapshot_t current) {
+    if (!previous.active && current.active) {
+        buzzer_beep(1);
+        return;
+    }
+
+    if (previous.active && !current.active && current.reps == 0 && current.sets == 0) {
+        buzzer_beep(2);
+        return;
+    }
+
+    if (current.sets > previous.sets && !current.active && current.reps == 0) {
+        buzzer_beep(3);
+        if (current.sets >= TARGET_SETS) {
+            buzzer_beep(5);
+        }
+    }
+}
+
+static void handle_speed_output(int previous_speed_rep, int current_speed_rep) {
+    if (current_speed_rep <= 0 || current_speed_rep == previous_speed_rep) return;
+    buzzer_beep(1);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MQTT 콜백
 // ─────────────────────────────────────────────────────────────────────────────
@@ -254,6 +395,9 @@ static void on_publish(void *arg, const char *topic, u32_t tot_len) {
 
 static void on_data(void *arg, const u8_t *data, u16_t len, u8_t flags) {
     (void)arg;
+    session_snapshot_t previous_session = current_session_snapshot();
+    int previous_speed_rep = g_speed_rep;
+
     int copy = len;
     if (g_pay_len + copy >= (int)sizeof(g_payload) - 1)
         copy = (int)sizeof(g_payload) - 1 - g_pay_len;
@@ -266,14 +410,34 @@ static void on_data(void *arg, const u8_t *data, u16_t len, u8_t flags) {
         g_reps = json_int(g_payload, "reps");
         g_sets = json_int(g_payload, "sets");
         g_active = json_bool(g_payload, "active", false);
+        handle_session_output(previous_session, current_session_snapshot());
     } else if (strcmp(g_cur_topic, TOPIC_SPEED) == 0) {
+        g_speed_rep = json_int(g_payload, "rep");
         g_speed_ms = json_int(g_payload, "speed_ms");
         json_str(g_payload, "warn", g_warn, sizeof(g_warn));
+        handle_speed_output(previous_speed_rep, g_speed_rep);
+    } else if (strcmp(g_cur_topic, TOPIC_REST) == 0) {
+        g_rest_set = json_int(g_payload, "set");
+        g_rest_sec = json_int(g_payload, "rest_sec");
     } else if (strcmp(g_cur_topic, TOPIC_DAILY) == 0) {
         g_daily_reps = json_int(g_payload, "total_reps");
         g_daily_sets = json_int(g_payload, "total_sets");
     }
     g_dirty = true;
+}
+
+static void render_display(void) {
+    char line[17];
+    display_state_t state = current_display_state();
+
+    snprintf(line, sizeof(line), "R:%-2d S:%d/%d %s",
+             state.reps, state.sets, TARGET_SETS,
+             state.active ? "ACTV" : "IDLE");
+    lcd_puts_line(0, line);
+
+    snprintf(line, sizeof(line), "%dms[%s]D:%dR",
+             state.speed_ms, state.warn, state.daily_reps);
+    lcd_puts_line(1, line);
 }
 
 static void on_sub(void *arg, err_t result) {
@@ -296,6 +460,7 @@ static void on_connect(mqtt_client_t *client, void *arg,
     mqtt_set_inpub_callback(client, on_publish, on_data, NULL);
     mqtt_subscribe(client, TOPIC_COUNT, 0, on_sub, NULL);
     mqtt_subscribe(client, TOPIC_SPEED, 0, on_sub, NULL);
+    mqtt_subscribe(client, TOPIC_REST, 0, on_sub, NULL);
     mqtt_subscribe(client, TOPIC_DAILY, 0, on_sub, NULL);
 }
 
@@ -318,19 +483,7 @@ static void mqtt_connect_broker(void) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void display_update(void) {
-    char line[17];  // 16자 + '\0'
-
-    // Row 0: 반복 횟수 / 세트 / 상태
-    snprintf(line, sizeof(line), "R:%-2d S:%d/%d %s",
-             g_reps, g_sets, TARGET_SETS,
-             g_active ? "ACTV" : "IDLE");
-    lcd_puts_line(0, line);
-
-    // Row 1: 속도 [경고] 일일누적
-    snprintf(line, sizeof(line), "%dms[%s]D:%dR",
-             g_speed_ms, g_warn, g_daily_reps);
-    lcd_puts_line(1, line);
-
+    render_display();
     update_status_led();
     g_dirty = false;
 }
@@ -344,17 +497,8 @@ int main(void) {
     sleep_ms(2000);
     printf("=== FitPico Display Node ===\n");
 
-    ws2812_init_strip();
+    init_display_outputs();
     update_status_led();
-
-    // I2C 초기화
-    i2c_init(LCD_I2C, 100000);  // PCF8574 표준 속도 100 kHz
-    gpio_set_function(LCD_SDA, GPIO_FUNC_I2C);
-    gpio_set_function(LCD_SCL, GPIO_FUNC_I2C);
-    gpio_pull_up(LCD_SDA);
-    gpio_pull_up(LCD_SCL);
-
-    lcd_init();
     lcd_puts_line(0, "=== FitPico ===");
     lcd_puts_line(1, "WiFi 연결 중...");
 
@@ -367,8 +511,7 @@ int main(void) {
     }
     cyw43_arch_enable_sta_mode();
     printf("[WiFi] %s 연결 중...\n", WIFI_SSID);
-    if (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASSWORD,
-                                           CYW43_AUTH_WPA2_AES_PSK, 15000)) {
+    if (!connect_wifi_with_fallbacks()) {
         printf("[WiFi] 연결 실패\n");
         lcd_puts_line(1, "WiFi failed     ");
         ws2812_fill(255, 0, 0);
@@ -383,10 +526,16 @@ int main(void) {
     sleep_ms(1000);
 
     display_update();
+    uint32_t last_heartbeat_ms = 0;
 
     while (true) {
         cyw43_arch_poll();
         if (g_dirty) display_update();
+        uint32_t now = to_ms_since_boot(get_absolute_time());
+        if (g_mqtt_ready && (now - last_heartbeat_ms > DEVICE_HEARTBEAT_INTERVAL_MS)) {
+            publish_display_heartbeat();
+            last_heartbeat_ms = now;
+        }
         sleep_ms(100);
     }
 

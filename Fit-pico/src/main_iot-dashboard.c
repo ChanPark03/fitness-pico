@@ -17,7 +17,10 @@
 
 #define HTTP_PORT 80
 #define HTTP_REQ_BUF_SIZE 512
+#define HTTP_POLL_INTERVAL_MS 1500
 #define DASHBOARD_HOSTNAME "fitpico-dashboard"
+#define SPEED_HISTORY 5
+#define BOARD_OFFLINE_TIMEOUT_SEC (BOARD_OFFLINE_TIMEOUT_MS / 1000)
 
 static mqtt_client_t *g_mqtt_client = NULL;
 static bool g_mqtt_ready = false;
@@ -40,7 +43,9 @@ static int g_rest_after = 0;
 static int g_daily_reps = 0;
 static int g_daily_sets = 0;
 
-#define SPEED_HISTORY 5
+static uint32_t g_last_sensor_seen_ms = 0;
+static uint32_t g_last_display_seen_ms = 0;
+
 static int g_speed_hist[SPEED_HISTORY] = {0};
 static int g_hist_idx = 0;
 static int g_hist_count = 0;
@@ -53,7 +58,7 @@ static const char DASHBOARD_HTML[] =
 "<head>\n"
 "<meta charset=\"utf-8\">\n"
 "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
-"<title>FitPico Dashboard</title>\n"
+"<title>핏피코 대시보드</title>\n"
 "<style>\n"
 ":root{color-scheme:light;background:#f7f5ef;color:#122027;--card:#fffdf8;--line:#d9d2c4;--accent:#0d9488;--warn:#ca8a04;--danger:#dc2626;--muted:#5b6470;--ok:#15803d}\n"
 "*{box-sizing:border-box}body{margin:0;font-family:ui-rounded,system-ui,-apple-system,sans-serif;background:radial-gradient(circle at top,#fff7e8 0,#f7f5ef 48%,#efece2 100%);color:#122027}\n"
@@ -73,23 +78,25 @@ static const char DASHBOARD_HTML[] =
 "<body>\n"
 "<div class=\"wrap\">\n"
 "<div class=\"hero\">\n"
-"<div><h1>FitPico Dashboard</h1><p class=\"sub\">Pico W web dashboard for your workout IoT device.</p></div>\n"
-"<div class=\"pill\"><span class=\"dot\" id=\"net-dot\"></span><span id=\"net-text\">Loading...</span></div>\n"
+"<div><h1>핏피코 대시보드</h1><p class=\"sub\">운동 IoT 디바이스 상태를 웹에서 실시간으로 확인합니다.</p></div>\n"
+"<div class=\"pill\"><span class=\"dot\" id=\"net-dot\"></span><span id=\"net-text\">연결 확인 중...</span></div>\n"
 "</div>\n"
 "<div class=\"grid\">\n"
-"<section class=\"card wide\"><div class=\"label\">Session Status</div><div class=\"value status\" id=\"status-text\">-</div><div class=\"meta\" id=\"status-meta\">MQTT data incoming...</div></section>\n"
-"<section class=\"card kpi\"><div class=\"label\">Reps</div><div class=\"value\" id=\"reps\">0</div></section>\n"
-"<section class=\"card kpi\"><div class=\"label\">Sets</div><div class=\"value\" id=\"sets\">0 / 0</div></section>\n"
-"<section class=\"card kpi\"><div class=\"label\">Last Speed</div><div class=\"value\" id=\"speed\">0 ms</div></section>\n"
-"<section class=\"card full\"><div class=\"label\">Warnings & Rest</div><div class=\"list\"><div class=\"chip\" id=\"warn\">Warn: ---</div><div class=\"chip\" id=\"rest\">Rest: -</div><div class=\"chip\" id=\"daily\">Daily: 0 reps / 0 sets</div></div></section>\n"
-"<section class=\"card full\"><div class=\"label\">Recent Speed History</div><div class=\"history\" id=\"history\"></div><div class=\"footer\">This page refreshes data automatically every 1.5 seconds.</div></section>\n"
+"<section class=\"card wide\"><div class=\"label\">운동 상태</div><div class=\"value status\" id=\"status-text\">-</div><div class=\"meta\" id=\"status-meta\">MQTT 데이터를 기다리는 중...</div></section>\n"
+"<section class=\"card kpi\"><div class=\"label\">반복 횟수</div><div class=\"value\" id=\"reps\">0</div></section>\n"
+"<section class=\"card kpi\"><div class=\"label\">세트</div><div class=\"value\" id=\"sets\">0 / 0</div></section>\n"
+"<section class=\"card kpi\"><div class=\"label\">최근 속도</div><div class=\"value\" id=\"speed\">0 ms</div></section>\n"
+"<section class=\"card full\"><div class=\"label\">보드 연결 상태</div><div class=\"list\"><div class=\"chip\" id=\"sensor-board\">센서 보드: 확인 중</div><div class=\"chip\" id=\"display-board\">디스플레이 보드: 확인 중</div></div></section>\n"
+"<section class=\"card full\"><div class=\"label\">경고 및 휴식</div><div class=\"list\"><div class=\"chip\" id=\"warn\">경고: ---</div><div class=\"chip\" id=\"rest\">휴식: -</div><div class=\"chip\" id=\"daily\">일일 누적: 0회 / 0세트</div></div></section>\n"
+"<section class=\"card full\"><div class=\"label\">최근 속도 기록</div><div class=\"history\" id=\"history\"></div><div class=\"footer\">1.5초마다 자동으로 갱신됩니다.</div></section>\n"
 "</div>\n"
 "</div>\n"
 "<script>\n"
 "function esc(v){return String(v)}\n"
 "function statusClass(s,w){if(!s)return 'idle';if(w==='slow')return 'danger';if(w==='fast')return 'warn';return 'active'}\n"
-"function renderBars(history){const host=document.getElementById('history');host.innerHTML='';if(!history.length){host.innerHTML='<div class=\"meta\">No rep speed data yet.</div>';return;}const max=Math.max(...history,1);history.forEach(v=>{const bar=document.createElement('div');bar.className='bar';bar.style.height=Math.max(24,Math.round((v/max)*120))+'px';const label=document.createElement('span');label.textContent=v+'ms';bar.appendChild(label);host.appendChild(bar);});}\n"
-"async function refresh(){try{const res=await fetch('/api/status',{cache:'no-store'});const data=await res.json();document.getElementById('net-text').textContent=data.mqtt_ready?'MQTT Connected':'MQTT Waiting';document.getElementById('net-dot').style.background=data.mqtt_ready?'#16a34a':'#f59e0b';const statusText=data.active?'ACTIVE':'IDLE';const statusEl=document.getElementById('status-text');statusEl.textContent=statusText;statusEl.className='value status '+statusClass(data.active,data.warn);document.getElementById('status-meta').textContent='Rep '+data.speed_rep+' | Warn '+data.warn+' | After set '+data.rest_after;document.getElementById('reps').textContent=esc(data.reps);document.getElementById('sets').textContent=esc(data.sets)+' / '+esc(data.target_sets);document.getElementById('speed').textContent=esc(data.speed_ms)+' ms';document.getElementById('warn').textContent='Warn: '+esc(data.warn);document.getElementById('rest').textContent='Rest: '+(data.rest_sec>0?(esc(data.rest_sec)+' sec after set '+esc(data.rest_after)):'-');document.getElementById('daily').textContent='Daily: '+esc(data.daily_reps)+' reps / '+esc(data.daily_sets)+' sets';renderBars(data.speed_history||[]);}catch(err){document.getElementById('net-text').textContent='Dashboard Offline';document.getElementById('net-dot').style.background='#dc2626';}}\n"
+"function renderBars(history){const host=document.getElementById('history');host.innerHTML='';if(!history.length){host.innerHTML='<div class=\"meta\">아직 속도 기록이 없습니다.</div>';return;}const max=Math.max(...history,1);history.forEach(v=>{const bar=document.createElement('div');bar.className='bar';bar.style.height=Math.max(24,Math.round((v/max)*120))+'px';const label=document.createElement('span');label.textContent=v+'ms';bar.appendChild(label);host.appendChild(bar);});}\n"
+"function boardLabel(name,status,seconds){if(status==='checking')return name+': 확인 중';if(status==='online')return name+': 온라인 ('+seconds+'초 전)';return name+': 오프라인';}\n"
+"async function refresh(){try{const res=await fetch('/api/status',{cache:'no-store'});const data=await res.json();document.getElementById('net-text').textContent=data.mqtt_ready?'MQTT 연결됨':'MQTT 대기 중';document.getElementById('net-dot').style.background=data.mqtt_ready?'#16a34a':'#f59e0b';const statusText=data.active?'운동 중':'대기 중';const statusEl=document.getElementById('status-text');statusEl.textContent=statusText;statusEl.className='value status '+statusClass(data.active,data.warn);document.getElementById('status-meta').textContent='최근 반복 '+data.speed_rep+' | 경고 '+data.warn+' | 세트 후 휴식 '+data.rest_after;document.getElementById('reps').textContent=esc(data.reps);document.getElementById('sets').textContent=esc(data.sets)+' / '+esc(data.target_sets);document.getElementById('speed').textContent=esc(data.speed_ms)+' ms';document.getElementById('warn').textContent='경고: '+esc(data.warn);document.getElementById('rest').textContent='휴식: '+(data.rest_sec>0?(esc(data.rest_sec)+'초 (세트 '+esc(data.rest_after)+' 후)'):'-');document.getElementById('daily').textContent='일일 누적: '+esc(data.daily_reps)+'회 / '+esc(data.daily_sets)+'세트';document.getElementById('sensor-board').textContent=boardLabel('센서 보드',data.sensor_status,data.sensor_seen_sec);document.getElementById('display-board').textContent=boardLabel('디스플레이 보드',data.display_status,data.display_seen_sec);renderBars(data.speed_history||[]);}catch(err){document.getElementById('net-text').textContent='대시보드 연결 끊김';document.getElementById('net-dot').style.background='#dc2626';}}\n"
 "refresh();setInterval(refresh,1500);\n"
 "</script>\n"
 "</body>\n"
@@ -143,6 +150,44 @@ static int speed_avg(void) {
     return sum / g_hist_count;
 }
 
+static uint32_t now_ms(void) {
+    return to_ms_since_boot(get_absolute_time());
+}
+
+static uint32_t seconds_since(uint32_t last_seen_ms, uint32_t now_ms) {
+    if (last_seen_ms == 0 || now_ms < last_seen_ms) return 9999;
+    return (now_ms - last_seen_ms) / 1000;
+}
+
+static void mark_sensor_seen(void) {
+    g_last_sensor_seen_ms = now_ms();
+}
+
+static void mark_display_seen(void) {
+    g_last_display_seen_ms = now_ms();
+}
+
+static const char *board_status(uint32_t last_seen_ms, uint32_t current_ms) {
+    if (last_seen_ms == 0) return "checking";
+    if (current_ms < last_seen_ms) return "checking";
+    if ((current_ms - last_seen_ms) > BOARD_OFFLINE_TIMEOUT_MS) return "offline";
+    return "online";
+}
+
+static size_t build_speed_history_json(char *out, size_t out_size) {
+    size_t pos = 0;
+    pos += (size_t)snprintf(out + pos, out_size - pos, "[");
+    for (int i = 0; i < g_hist_count && pos < out_size; i++) {
+        int idx = (g_hist_idx - g_hist_count + i + SPEED_HISTORY) % SPEED_HISTORY;
+        pos += (size_t)snprintf(out + pos, out_size - pos, "%s%d",
+                                i ? "," : "", g_speed_hist[idx]);
+    }
+    if (pos < out_size) {
+        snprintf(out + pos, out_size - pos, "]");
+    }
+    return pos;
+}
+
 static void on_publish(void *arg, const char *topic, u32_t tot_len) {
     (void)arg;
     (void)tot_len;
@@ -166,6 +211,7 @@ static void on_data(void *arg, const u8_t *data, u16_t len, u8_t flags) {
         g_reps = json_int(g_payload, "reps");
         g_sets = json_int(g_payload, "sets");
         g_active = json_bool(g_payload, "active", false);
+        mark_sensor_seen();
     } else if (strcmp(g_cur_topic, TOPIC_SPEED) == 0) {
         g_speed_ms = json_int(g_payload, "speed_ms");
         g_speed_rep = json_int(g_payload, "rep");
@@ -179,6 +225,11 @@ static void on_data(void *arg, const u8_t *data, u16_t len, u8_t flags) {
     } else if (strcmp(g_cur_topic, TOPIC_DAILY) == 0) {
         g_daily_reps = json_int(g_payload, "total_reps");
         g_daily_sets = json_int(g_payload, "total_sets");
+        mark_sensor_seen();
+    } else if (strcmp(g_cur_topic, TOPIC_SENSOR_STATUS) == 0) {
+        mark_sensor_seen();
+    } else if (strcmp(g_cur_topic, TOPIC_DISPLAY_STATUS) == 0) {
+        mark_display_seen();
     }
 }
 
@@ -186,6 +237,15 @@ static void on_sub(void *arg, err_t result) {
     (void)arg;
     if (result != ERR_OK) printf("[MQTT] 구독 실패: %d\n", result);
     else printf("[MQTT] 구독 성공\n");
+}
+
+static void subscribe_dashboard_topics(mqtt_client_t *client) {
+    mqtt_subscribe(client, TOPIC_COUNT, 0, on_sub, NULL);
+    mqtt_subscribe(client, TOPIC_SPEED, 0, on_sub, NULL);
+    mqtt_subscribe(client, TOPIC_REST, 0, on_sub, NULL);
+    mqtt_subscribe(client, TOPIC_DAILY, 0, on_sub, NULL);
+    mqtt_subscribe(client, TOPIC_SENSOR_STATUS, 0, on_sub, NULL);
+    mqtt_subscribe(client, TOPIC_DISPLAY_STATUS, 0, on_sub, NULL);
 }
 
 static void on_connect(mqtt_client_t *client, void *arg, mqtt_connection_status_t status) {
@@ -198,10 +258,7 @@ static void on_connect(mqtt_client_t *client, void *arg, mqtt_connection_status_
     printf("[MQTT] 브로커 연결 성공\n");
     g_mqtt_ready = true;
     mqtt_set_inpub_callback(client, on_publish, on_data, NULL);
-    mqtt_subscribe(client, TOPIC_COUNT, 0, on_sub, NULL);
-    mqtt_subscribe(client, TOPIC_SPEED, 0, on_sub, NULL);
-    mqtt_subscribe(client, TOPIC_REST, 0, on_sub, NULL);
-    mqtt_subscribe(client, TOPIC_DAILY, 0, on_sub, NULL);
+    subscribe_dashboard_topics(client);
 }
 
 static void mqtt_connect_broker(void) {
@@ -220,15 +277,13 @@ static void mqtt_connect_broker(void) {
 
 static int build_status_json(char *out, size_t out_size) {
     char history[96] = {0};
-    size_t pos = 0;
+    uint32_t current_ms = now_ms();
+    uint32_t sensor_seen_sec = seconds_since(g_last_sensor_seen_ms, current_ms);
+    uint32_t display_seen_sec = seconds_since(g_last_display_seen_ms, current_ms);
+    const char *sensor_state = board_status(g_last_sensor_seen_ms, current_ms);
+    const char *display_state = board_status(g_last_display_seen_ms, current_ms);
 
-    pos += (size_t)snprintf(history + pos, sizeof(history) - pos, "[");
-    for (int i = 0; i < g_hist_count && pos < sizeof(history); i++) {
-        int idx = (g_hist_idx - g_hist_count + i + SPEED_HISTORY) % SPEED_HISTORY;
-        pos += (size_t)snprintf(history + pos, sizeof(history) - pos, "%s%d",
-                                i ? "," : "", g_speed_hist[idx]);
-    }
-    snprintf(history + pos, sizeof(history) - pos, "]");
+    build_speed_history_json(history, sizeof(history));
 
     return snprintf(
         out, out_size,
@@ -246,6 +301,12 @@ static int build_status_json(char *out, size_t out_size) {
         "\"daily_reps\":%d,"
         "\"daily_sets\":%d,"
         "\"avg_speed\":%d,"
+        "\"sensor_status\":\"%s\","
+        "\"sensor_online\":%s,"
+        "\"sensor_seen_sec\":%u,"
+        "\"display_status\":\"%s\","
+        "\"display_online\":%s,"
+        "\"display_seen_sec\":%u,"
         "\"speed_history\":%s"
         "}",
         g_mqtt_ready ? "true" : "false",
@@ -261,6 +322,12 @@ static int build_status_json(char *out, size_t out_size) {
         g_daily_reps,
         g_daily_sets,
         speed_avg(),
+        sensor_state,
+        strcmp(sensor_state, "online") == 0 ? "true" : "false",
+        (unsigned)sensor_seen_sec,
+        display_state,
+        strcmp(display_state, "online") == 0 ? "true" : "false",
+        (unsigned)display_seen_sec,
         history
     );
 }

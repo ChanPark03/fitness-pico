@@ -2,6 +2,7 @@
 
 // Pico W MQTT 예제 기준 LwIP 설정
 // 참고: https://github.com/raspberrypi/pico-examples/tree/master/pico_w/wifi/mqtt
+// 이 프로젝트는 MQTT + HTTP + mDNS를 함께 사용하므로 기본 예제보다 타이머/서비스 슬롯이 더 필요하다.
 
 #define NO_SYS                      1
 #define LWIP_SOCKET                 0
@@ -14,6 +15,7 @@
 
 #define MEM_ALIGNMENT               4
 #define MEM_SIZE                    16000
+// DHCP, MQTT, HTTP, mDNS 타이머가 함께 돌 때 sys_timeout pool 고갈 panic 방지
 #define MEMP_NUM_SYS_TIMEOUT        (LWIP_NUM_SYS_TIMEOUT_INTERNAL + 8)
 #define MEMP_NUM_TCP_SEG            32
 #define MEMP_NUM_ARP_QUEUE          10
@@ -30,7 +32,7 @@
 #define LWIP_NETIF_STATUS_CALLBACK  1
 #define LWIP_NETIF_LINK_CALLBACK    1
 #define LWIP_NETIF_HOSTNAME         1
-#define LWIP_NUM_NETIF_CLIENT_DATA  1
+#define LWIP_NUM_NETIF_CLIENT_DATA  1  // mDNS responder가 netif client data 슬롯 사용
 #define LWIP_NETCONN                0
 #define MEM_STATS                   0
 #define SYS_STATS                   0
@@ -42,7 +44,7 @@
 #define LWIP_TCP                    1
 #define LWIP_UDP                    1
 #define LWIP_DNS                    1
-#define LWIP_MDNS_RESPONDER         1
+#define LWIP_MDNS_RESPONDER         1  // fitpico-dashboard.local 광고용
 #define LWIP_TCP_KEEPALIVE          1
 #define LWIP_NETIF_TX_SINGLE_PBUF   1
 #define DHCP_DOES_ARP_CHECK         0
