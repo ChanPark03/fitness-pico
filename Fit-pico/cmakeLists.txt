@@ -79,9 +79,14 @@ add_executable(fitpico_display
     src/main_display.c
 )
 
+pico_generate_pio_header(fitpico_display
+    ${PICO_SDK_PATH}/src/rp2_common/pico_status_led/ws2812.pio
+)
+
 target_link_libraries(fitpico_display
     pico_stdlib
     hardware_i2c
+    hardware_pio
     pico_cyw43_arch_lwip_threadsafe_background
     pico_lwip_mqtt
 )
@@ -111,6 +116,7 @@ target_link_libraries(fitpico_dashboard
     pico_stdlib
     pico_cyw43_arch_lwip_threadsafe_background
     pico_lwip_mqtt
+    pico_lwip_mdns
 )
 
 target_include_directories(fitpico_dashboard PRIVATE

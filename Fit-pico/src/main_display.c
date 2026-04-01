@@ -22,11 +22,13 @@
 #include "pico/stdlib.h"
 #include "pico/cyw43_arch.h"
 #include "hardware/i2c.h"
+#include "hardware/pio.h"
 
 #include "lwip/apps/mqtt.h"
 #include "lwip/ip_addr.h"
 
 #include "config.h"
+#include "ws2812.pio.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // I2C LCD (PCF8574 백팩) 설정
@@ -43,6 +45,8 @@
 #define LCD_EN  0x04   // P2
 #define LCD_BL  0x08   // P3 백라이트
 // D4~D7 = P4~P7 (상위 니블)
+
+#define WS2812_FREQ 800000
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LCD 드라이버 (HD44780 4-bit via PCF8574)
@@ -138,6 +142,68 @@ static int  g_daily_reps  = 0;
 static int  g_daily_sets  = 0;
 
 static bool g_dirty = true;
+static bool g_wifi_ready = false;
+
+static PIO  g_ws2812_pio    = pio0;
+static int  g_ws2812_sm     = -1;
+static bool g_ws2812_ready  = false;
+
+static void put_pixel(uint32_t pixel_grb) {
+    if (!g_ws2812_ready) return;
+    pio_sm_put_blocking(g_ws2812_pio, (uint)g_ws2812_sm, pixel_grb << 8u);
+}
+
+static uint32_t urgb_u32(uint8_t r, uint8_t g, uint8_t b) {
+    return ((uint32_t)g << 16) | ((uint32_t)r << 8) | (uint32_t)b;
+}
+
+static void ws2812_fill(uint8_t r, uint8_t g, uint8_t b) {
+    uint32_t color = urgb_u32(r, g, b);
+    for (int i = 0; i < WS2812_LED_COUNT; i++) {
+        put_pixel(color);
+    }
+}
+
+static void ws2812_init_strip(void) {
+    g_ws2812_sm = pio_claim_unused_sm(g_ws2812_pio, false);
+    if (g_ws2812_sm < 0) {
+        printf("[RGB] 사용 가능한 PIO state machine이 없습니다.\n");
+        return;
+    }
+    uint offset = pio_add_program(g_ws2812_pio, &ws2812_program);
+    ws2812_program_init(g_ws2812_pio, (uint)g_ws2812_sm, offset,
+                        WS2812_PIN, WS2812_FREQ, WS2812_IS_RGBW);
+    g_ws2812_ready = true;
+    ws2812_fill(0, 0, 0);
+}
+
+static void update_status_led(void) {
+    if (!g_ws2812_ready) return;
+
+    if (!g_wifi_ready) {
+        ws2812_fill(255, 80, 0);
+        return;
+    }
+    if (!g_mqtt_ready) {
+        ws2812_fill(0, 80, 255);
+        return;
+    }
+    if (g_sets >= TARGET_SETS && !g_active) {
+        ws2812_fill(180, 0, 255);
+        return;
+    }
+    if (g_active) {
+        if (strcmp(g_warn, "fast") == 0) {
+            ws2812_fill(255, 180, 0);
+        } else if (strcmp(g_warn, "slow") == 0) {
+            ws2812_fill(255, 0, 0);
+        } else {
+            ws2812_fill(0, 180, 0);
+        }
+        return;
+    }
+    ws2812_fill(0, 0, 180);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // JSON 파싱 헬퍼
@@ -164,6 +230,18 @@ static void json_str(const char *json, const char *key, char *out, int sz) {
     out[i] = '\0';
 }
 
+static bool json_bool(const char *json, const char *key, bool default_value) {
+    char search[32];
+    snprintf(search, sizeof(search), "\"%s\":", key);
+    const char *p = strstr(json, search);
+    if (!p) return default_value;
+    p += strlen(search);
+    while (*p == ' ') p++;
+    if (strncmp(p, "true", 4) == 0) return true;
+    if (strncmp(p, "false", 5) == 0) return false;
+    return default_value;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MQTT 콜백
 // ─────────────────────────────────────────────────────────────────────────────
@@ -187,8 +265,7 @@ static void on_data(void *arg, const u8_t *data, u16_t len, u8_t flags) {
     if (strcmp(g_cur_topic, TOPIC_COUNT) == 0) {
         g_reps = json_int(g_payload, "reps");
         g_sets = json_int(g_payload, "sets");
-        char act[8]; json_str(g_payload, "active", act, sizeof(act));
-        g_active = (strcmp(act, "true") == 0);
+        g_active = json_bool(g_payload, "active", false);
     } else if (strcmp(g_cur_topic, TOPIC_SPEED) == 0) {
         g_speed_ms = json_int(g_payload, "speed_ms");
         json_str(g_payload, "warn", g_warn, sizeof(g_warn));
@@ -210,10 +287,12 @@ static void on_connect(mqtt_client_t *client, void *arg,
     if (status != MQTT_CONNECT_ACCEPTED) {
         printf("[MQTT] 연결 실패 (status=%d)\n", status);
         g_mqtt_ready = false;
+        update_status_led();
         return;
     }
     printf("[MQTT] 연결 성공\n");
     g_mqtt_ready = true;
+    update_status_led();
     mqtt_set_inpub_callback(client, on_publish, on_data, NULL);
     mqtt_subscribe(client, TOPIC_COUNT, 0, on_sub, NULL);
     mqtt_subscribe(client, TOPIC_SPEED, 0, on_sub, NULL);
@@ -252,6 +331,7 @@ static void display_update(void) {
              g_speed_ms, g_warn, g_daily_reps);
     lcd_puts_line(1, line);
 
+    update_status_led();
     g_dirty = false;
 }
 
@@ -263,6 +343,9 @@ int main(void) {
     stdio_init_all();
     sleep_ms(2000);
     printf("=== FitPico Display Node ===\n");
+
+    ws2812_init_strip();
+    update_status_led();
 
     // I2C 초기화
     i2c_init(LCD_I2C, 100000);  // PCF8574 표준 속도 100 kHz
@@ -279,6 +362,7 @@ int main(void) {
     if (cyw43_arch_init()) {
         printf("[WiFi] 초기화 실패\n");
         lcd_puts_line(1, "WiFi init fail  ");
+        ws2812_fill(255, 0, 0);
         return 1;
     }
     cyw43_arch_enable_sta_mode();
@@ -287,9 +371,12 @@ int main(void) {
                                            CYW43_AUTH_WPA2_AES_PSK, 15000)) {
         printf("[WiFi] 연결 실패\n");
         lcd_puts_line(1, "WiFi failed     ");
+        ws2812_fill(255, 0, 0);
         return 1;
     }
     printf("[WiFi] 연결 완료\n");
+    g_wifi_ready = true;
+    update_status_led();
     lcd_puts_line(1, "MQTT 연결 중...");
 
     mqtt_connect_broker();
