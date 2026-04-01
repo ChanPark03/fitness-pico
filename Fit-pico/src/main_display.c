@@ -200,7 +200,7 @@ static void ws2812_fill(uint8_t r, uint8_t g, uint8_t b) {
 static void ws2812_init_strip(void) {
     g_ws2812_sm = pio_claim_unused_sm(g_ws2812_pio, false);
     if (g_ws2812_sm < 0) {
-        printf("[RGB] 사용 가능한 PIO state machine이 없습니다.\n");
+        printf("[RGB] No available PIO state machine.\n");
         return;
     }
     uint offset = pio_add_program(g_ws2812_pio, &ws2812_program);
@@ -296,15 +296,15 @@ static void buzzer_beep(int count) {
 
 static bool connect_wifi_with_fallbacks(void) {
     for (size_t i = 0; i < sizeof(WIFI_AUTH_MODES) / sizeof(WIFI_AUTH_MODES[0]); i++) {
-        printf("[WiFi] %s 연결 시도...\n", WIFI_AUTH_NAMES[i]);
+        printf("[WiFi] Trying %s...\n", WIFI_AUTH_NAMES[i]);
         int err = cyw43_arch_wifi_connect_timeout_ms(
             WIFI_SSID, WIFI_PASSWORD, WIFI_AUTH_MODES[i], 15000
         );
         if (err == 0) {
-            printf("[WiFi] 연결 성공 (%s)\n", WIFI_AUTH_NAMES[i]);
+            printf("[WiFi] Connected (%s)\n", WIFI_AUTH_NAMES[i]);
             return true;
         }
-        printf("[WiFi] 연결 실패 (%s, err=%d)\n", WIFI_AUTH_NAMES[i], err);
+        printf("[WiFi] Failed (%s, err=%d)\n", WIFI_AUTH_NAMES[i], err);
         sleep_ms(500);
     }
     return false;
@@ -442,19 +442,19 @@ static void render_display(void) {
 
 static void on_sub(void *arg, err_t result) {
     (void)arg;
-    if (result != ERR_OK) printf("[MQTT] 구독 실패: %d\n", result);
+    if (result != ERR_OK) printf("[MQTT] Subscribe failed: %d\n", result);
 }
 
 static void on_connect(mqtt_client_t *client, void *arg,
                        mqtt_connection_status_t status) {
     (void)arg;
     if (status != MQTT_CONNECT_ACCEPTED) {
-        printf("[MQTT] 연결 실패 (status=%d)\n", status);
+        printf("[MQTT] Connection failed (status=%d)\n", status);
         g_mqtt_ready = false;
         update_status_led();
         return;
     }
-    printf("[MQTT] 연결 성공\n");
+    printf("[MQTT] Connected\n");
     g_mqtt_ready = true;
     update_status_led();
     mqtt_set_inpub_callback(client, on_publish, on_data, NULL);
@@ -500,27 +500,26 @@ int main(void) {
     init_display_outputs();
     update_status_led();
     lcd_puts_line(0, "=== FitPico ===");
-    lcd_puts_line(1, "WiFi 연결 중...");
+    lcd_puts_line(1, "WiFi connecting");
 
-    // WiFi 연결
     if (cyw43_arch_init()) {
-        printf("[WiFi] 초기화 실패\n");
-        lcd_puts_line(1, "WiFi init fail  ");
+        printf("[WiFi] Init failed\n");
+        lcd_puts_line(1, "WiFi init failed");
         ws2812_fill(255, 0, 0);
         return 1;
     }
     cyw43_arch_enable_sta_mode();
-    printf("[WiFi] %s 연결 중...\n", WIFI_SSID);
+    printf("[WiFi] Connecting to %s...\n", WIFI_SSID);
     if (!connect_wifi_with_fallbacks()) {
-        printf("[WiFi] 연결 실패\n");
+        printf("[WiFi] Connection failed\n");
         lcd_puts_line(1, "WiFi failed     ");
         ws2812_fill(255, 0, 0);
         return 1;
     }
-    printf("[WiFi] 연결 완료\n");
+    printf("[WiFi] Connection complete\n");
     g_wifi_ready = true;
     update_status_led();
-    lcd_puts_line(1, "MQTT 연결 중...");
+    lcd_puts_line(1, "WiFi connected ");
 
     mqtt_connect_broker();
     sleep_ms(1000);
