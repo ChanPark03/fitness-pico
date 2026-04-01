@@ -16,8 +16,8 @@
 #include "config.h"
 
 #define HTTP_PORT 80
-#define HTTP_REQ_BUF_SIZE 512
-#define HTTP_POLL_INTERVAL_MS 1500
+#define HTTP_REQ_BUF_SIZE 768
+#define HTTP_POLL_INTERVAL_MS 500
 #define DASHBOARD_HOSTNAME "fitpico-dashboard"
 #define SPEED_HISTORY 5
 #define BOARD_OFFLINE_TIMEOUT_SEC (BOARD_OFFLINE_TIMEOUT_MS / 1000)
@@ -32,6 +32,8 @@ static int g_pay_len = 0;
 static int g_reps = 0;
 static int g_sets = 0;
 static bool g_active = false;
+static bool g_tracking = false;
+static bool g_sensing = true;
 
 static int g_speed_ms = 0;
 static char g_warn[8] = "---";
@@ -42,6 +44,8 @@ static int g_rest_after = 0;
 
 static int g_daily_reps = 0;
 static int g_daily_sets = 0;
+static uint32_t g_session_active_sec = 0;
+static uint32_t g_daily_active_sec = 0;
 
 static uint32_t g_last_sensor_seen_ms = 0;
 static uint32_t g_last_display_seen_ms = 0;
@@ -60,25 +64,26 @@ static const char DASHBOARD_HTML[] =
 "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
 "<title>핏피코 대시보드</title>\n"
 "<style>\n"
-":root{color-scheme:light;background:#f7f5ef;color:#122027;--card:#fffdf8;--line:#d9d2c4;--accent:#0d9488;--warn:#ca8a04;--danger:#dc2626;--muted:#5b6470;--ok:#15803d}\n"
+":root{color-scheme:light;background:#f7f5ef;color:#122027;--card:#fffdf8;--line:#d9d2c4;--accent:#0d9488;--warn:#ca8a04;--danger:#dc2626;--muted:#5b6470;--ok:#15803d;--paused:#2563eb;--monitor:#0f766e}\n"
 "*{box-sizing:border-box}body{margin:0;font-family:ui-rounded,system-ui,-apple-system,sans-serif;background:radial-gradient(circle at top,#fff7e8 0,#f7f5ef 48%,#efece2 100%);color:#122027}\n"
-".wrap{max-width:980px;margin:0 auto;padding:24px 16px 40px}.hero{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:20px}\n"
+".wrap{max-width:1080px;margin:0 auto;padding:24px 16px 40px}.hero{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:20px}\n"
 "h1{margin:0;font-size:clamp(28px,5vw,46px);letter-spacing:-0.04em}.sub{margin:8px 0 0;color:var(--muted)}\n"
 ".pill{display:inline-flex;align-items:center;gap:8px;padding:10px 14px;border:1px solid var(--line);border-radius:999px;background:rgba(255,255,255,.7);backdrop-filter:blur(8px);font-weight:700}\n"
 ".dot{width:12px;height:12px;border-radius:50%;background:#94a3b8}.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}\n"
 ".card{grid-column:span 12;background:var(--card);border:1px solid var(--line);border-radius:24px;padding:18px;box-shadow:0 10px 30px rgba(18,32,39,.06)}\n"
 ".kpi{grid-column:span 3}.wide{grid-column:span 6}.full{grid-column:span 12}.label{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}.value{margin-top:10px;font-size:clamp(28px,4vw,44px);font-weight:800}\n"
-".status{font-size:18px;font-weight:800}.status.active{color:var(--ok)}.status.idle{color:#2563eb}.status.warn{color:var(--warn)}.status.danger{color:var(--danger)}\n"
+".status{font-size:18px;font-weight:800}.status.active{color:var(--ok)}.status.paused{color:var(--paused)}.status.monitor{color:var(--monitor)}.status.warn{color:var(--warn)}.status.danger{color:var(--danger)}\n"
 ".meta{margin-top:8px;color:var(--muted)}.list{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.chip{padding:8px 12px;border-radius:999px;background:#f3efe6;border:1px solid var(--line);font-weight:600}\n"
 ".history{display:flex;gap:10px;align-items:flex-end;height:140px;margin-top:18px}.bar{flex:1;min-width:24px;background:linear-gradient(180deg,#14b8a6,#0f766e);border-radius:12px 12px 4px 4px;position:relative}\n"
 ".bar span{position:absolute;bottom:-26px;left:50%;transform:translateX(-50%);font-size:12px;color:var(--muted)}\n"
+".controls{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:12px}.btn{border:0;border-radius:999px;padding:12px 18px;font-weight:800;cursor:pointer;background:#0f766e;color:#fff}.btn.stop{background:#b91c1c}.btn:disabled{opacity:.5;cursor:not-allowed}.weight-wrap{display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid var(--line);border-radius:999px;background:#f8f3e8;font-weight:700}.weight-wrap input{width:88px;border:0;background:transparent;font:inherit;outline:none}\n"
 ".footer{margin-top:18px;color:var(--muted);font-size:14px}@media (max-width:820px){.kpi,.wide{grid-column:span 12}.hero{flex-direction:column}}\n"
 "</style>\n"
 "</head>\n"
 "<body>\n"
 "<div class=\"wrap\">\n"
 "<div class=\"hero\">\n"
-"<div><h1>핏피코 대시보드</h1><p class=\"sub\">운동 IoT 디바이스 상태를 웹에서 실시간으로 확인합니다.</p></div>\n"
+"<div><h1>핏피코 대시보드</h1><p class=\"sub\">웹에서 운동 저장을 시작·종료하고, 보드 상태와 추정 칼로리를 확인합니다.</p></div>\n"
 "<div class=\"pill\"><span class=\"dot\" id=\"net-dot\"></span><span id=\"net-text\">연결 확인 중...</span></div>\n"
 "</div>\n"
 "<div class=\"grid\">\n"
@@ -86,18 +91,27 @@ static const char DASHBOARD_HTML[] =
 "<section class=\"card kpi\"><div class=\"label\">반복 횟수</div><div class=\"value\" id=\"reps\">0</div></section>\n"
 "<section class=\"card kpi\"><div class=\"label\">세트</div><div class=\"value\" id=\"sets\">0 / 0</div></section>\n"
 "<section class=\"card kpi\"><div class=\"label\">최근 속도</div><div class=\"value\" id=\"speed\">0 ms</div></section>\n"
-"<section class=\"card full\"><div class=\"label\">보드 연결 상태</div><div class=\"list\"><div class=\"chip\" id=\"sensor-board\">센서 보드: 확인 중</div><div class=\"chip\" id=\"display-board\">디스플레이 보드: 확인 중</div></div></section>\n"
-"<section class=\"card full\"><div class=\"label\">경고 및 휴식</div><div class=\"list\"><div class=\"chip\" id=\"warn\">경고: ---</div><div class=\"chip\" id=\"rest\">휴식: -</div><div class=\"chip\" id=\"daily\">일일 누적: 0회 / 0세트</div></div></section>\n"
-"<section class=\"card full\"><div class=\"label\">최근 속도 기록</div><div class=\"history\" id=\"history\"></div><div class=\"footer\">1.5초마다 자동으로 갱신됩니다.</div></section>\n"
+"<section class=\"card full\"><div class=\"label\">운동 제어</div><div class=\"controls\"><button class=\"btn\" id=\"start-btn\">운동 시작</button><button class=\"btn stop\" id=\"stop-btn\">운동 종료</button><label class=\"weight-wrap\">체중(kg)<input id=\"weight\" type=\"number\" min=\"1\" max=\"300\" step=\"0.1\" value=\"70\"></label></div><div class=\"meta\" id=\"control-meta\">버튼을 누르면 센서 보드의 저장 모드가 전환됩니다.</div></section>\n"
+"<section class=\"card kpi\"><div class=\"label\">현재 세션 kcal</div><div class=\"value\" id=\"session-kcal\">0.0 kcal</div></section>\n"
+"<section class=\"card kpi\"><div class=\"label\">오늘 누적 kcal</div><div class=\"value\" id=\"daily-kcal\">0.0 kcal</div></section>\n"
+"<section class=\"card wide\"><div class=\"label\">보드 연결 상태</div><div class=\"list\"><div class=\"chip\" id=\"sensor-board\">센서 보드: 확인 중</div><div class=\"chip\" id=\"display-board\">디스플레이 보드: 확인 중</div></div></section>\n"
+"<section class=\"card full\"><div class=\"label\">경고 및 누적 정보</div><div class=\"list\"><div class=\"chip\" id=\"warn\">경고: ---</div><div class=\"chip\" id=\"rest\">휴식: -</div><div class=\"chip\" id=\"daily\">일일 누적: 0회 / 0세트</div><div class=\"chip\" id=\"mode-chip\">센서 모드: 확인 중</div></div></section>\n"
+"<section class=\"card full\"><div class=\"label\">최근 속도 기록</div><div class=\"history\" id=\"history\"></div><div class=\"footer\">0.5초마다 자동으로 갱신됩니다.</div></section>\n"
 "</div>\n"
 "</div>\n"
 "<script>\n"
+"const WEIGHT_KEY='fitpico-weight-kg';\n"
 "function esc(v){return String(v)}\n"
-"function statusClass(s,w){if(!s)return 'idle';if(w==='slow')return 'danger';if(w==='fast')return 'warn';return 'active'}\n"
+"function loadWeight(){const saved=localStorage.getItem(WEIGHT_KEY);return saved?saved:'70';}\n"
+"function saveWeight(v){localStorage.setItem(WEIGHT_KEY,String(v));}\n"
+"function calcKcal(weightKg,activeSec){const minutes=activeSec/60.0;return 8.0*3.5*weightKg/200.0*minutes;}\n"
+"function fmtKcal(v){return Number.isFinite(v)?v.toFixed(1)+' kcal':'0.0 kcal';}\n"
+"function statusInfo(data){if(data.active){if(data.warn==='slow')return{text:'운동 중',cls:'danger'};if(data.warn==='fast')return{text:'운동 중',cls:'warn'};return{text:'운동 중',cls:'active'};}if(data.tracking)return{text:'중지됨',cls:'paused'};return{text:'감지 중(저장 안 함)',cls:'monitor'};}\n"
 "function renderBars(history){const host=document.getElementById('history');host.innerHTML='';if(!history.length){host.innerHTML='<div class=\"meta\">아직 속도 기록이 없습니다.</div>';return;}const max=Math.max(...history,1);history.forEach(v=>{const bar=document.createElement('div');bar.className='bar';bar.style.height=Math.max(24,Math.round((v/max)*120))+'px';const label=document.createElement('span');label.textContent=v+'ms';bar.appendChild(label);host.appendChild(bar);});}\n"
-"function boardLabel(name,status,seconds){if(status==='checking')return name+': 확인 중';if(status==='online')return name+': 온라인 ('+seconds+'초 전)';return name+': 오프라인';}\n"
-"async function refresh(){try{const res=await fetch('/api/status',{cache:'no-store'});const data=await res.json();document.getElementById('net-text').textContent=data.mqtt_ready?'MQTT 연결됨':'MQTT 대기 중';document.getElementById('net-dot').style.background=data.mqtt_ready?'#16a34a':'#f59e0b';const statusText=data.active?'운동 중':'대기 중';const statusEl=document.getElementById('status-text');statusEl.textContent=statusText;statusEl.className='value status '+statusClass(data.active,data.warn);document.getElementById('status-meta').textContent='최근 반복 '+data.speed_rep+' | 경고 '+data.warn+' | 세트 후 휴식 '+data.rest_after;document.getElementById('reps').textContent=esc(data.reps);document.getElementById('sets').textContent=esc(data.sets)+' / '+esc(data.target_sets);document.getElementById('speed').textContent=esc(data.speed_ms)+' ms';document.getElementById('warn').textContent='경고: '+esc(data.warn);document.getElementById('rest').textContent='휴식: '+(data.rest_sec>0?(esc(data.rest_sec)+'초 (세트 '+esc(data.rest_after)+' 후)'):'-');document.getElementById('daily').textContent='일일 누적: '+esc(data.daily_reps)+'회 / '+esc(data.daily_sets)+'세트';document.getElementById('sensor-board').textContent=boardLabel('센서 보드',data.sensor_status,data.sensor_seen_sec);document.getElementById('display-board').textContent=boardLabel('디스플레이 보드',data.display_status,data.display_seen_sec);renderBars(data.speed_history||[]);}catch(err){document.getElementById('net-text').textContent='대시보드 연결 끊김';document.getElementById('net-dot').style.background='#dc2626';}}\n"
-"refresh();setInterval(refresh,1500);\n"
+"function boardLabel(name,status,seconds,extra){if(status==='checking')return name+': 확인 중';if(status==='online')return name+': 온라인 ('+seconds+'초 전'+(extra?' · '+extra:'')+')';return name+': 오프라인';}\n"
+"async function sendControl(command){const meta=document.getElementById('control-meta');meta.textContent='명령 전송 중...';try{const res=await fetch('/api/control/'+command,{method:'POST'});const data=await res.json();if(!res.ok||!data.ok)throw new Error(data.error||'request_failed');meta.textContent=command==='start'?'운동 시작 명령을 보냈습니다.':'운동 종료 명령을 보냈습니다.';refresh();}catch(err){meta.textContent='명령 전송 실패: '+err.message;}}\n"
+"async function refresh(){try{const res=await fetch('/api/status',{cache:'no-store'});const data=await res.json();const weight=parseFloat(document.getElementById('weight').value)||70;document.getElementById('net-text').textContent=data.mqtt_ready?'MQTT 연결됨':'MQTT 대기 중';document.getElementById('net-dot').style.background=data.mqtt_ready?'#16a34a':'#f59e0b';const info=statusInfo(data);const statusEl=document.getElementById('status-text');statusEl.textContent=info.text;statusEl.className='value status '+info.cls;document.getElementById('status-meta').textContent='세션 시간 '+data.session_active_sec+'초 | 최근 반복 '+data.speed_rep+' | 경고 '+data.warn;document.getElementById('reps').textContent=esc(data.reps);document.getElementById('sets').textContent=esc(data.sets)+' / '+esc(data.target_sets);document.getElementById('speed').textContent=esc(data.speed_ms)+' ms';document.getElementById('warn').textContent='경고: '+esc(data.warn);document.getElementById('rest').textContent='휴식: '+(data.rest_sec>0?(esc(data.rest_sec)+'초 (세트 '+esc(data.rest_after)+' 후)'):'-');document.getElementById('daily').textContent='일일 누적: '+esc(data.daily_reps)+'회 / '+esc(data.daily_sets)+'세트';document.getElementById('mode-chip').textContent='센서 모드: '+(data.tracking?'저장 중':'모니터링');document.getElementById('sensor-board').textContent=boardLabel('센서 보드',data.sensor_status,data.sensor_seen_sec,data.tracking?'저장 중':'모니터링');document.getElementById('display-board').textContent=boardLabel('디스플레이 보드',data.display_status,data.display_seen_sec,'표시 중');document.getElementById('session-kcal').textContent=fmtKcal(calcKcal(weight,data.session_active_sec));document.getElementById('daily-kcal').textContent=fmtKcal(calcKcal(weight,data.daily_active_sec));renderBars(data.speed_history||[]);}catch(err){document.getElementById('net-text').textContent='대시보드 연결 끊김';document.getElementById('net-dot').style.background='#dc2626';}}\n"
+"window.addEventListener('load',()=>{const weight=document.getElementById('weight');weight.value=loadWeight();weight.addEventListener('input',()=>{saveWeight(weight.value);refresh();});document.getElementById('start-btn').addEventListener('click',()=>sendControl('start'));document.getElementById('stop-btn').addEventListener('click',()=>sendControl('stop'));refresh();setInterval(refresh,500);});\n"
 "</script>\n"
 "</body>\n"
 "</html>\n";
@@ -154,9 +168,9 @@ static uint32_t now_ms(void) {
     return to_ms_since_boot(get_absolute_time());
 }
 
-static uint32_t seconds_since(uint32_t last_seen_ms, uint32_t now_ms) {
-    if (last_seen_ms == 0 || now_ms < last_seen_ms) return 9999;
-    return (now_ms - last_seen_ms) / 1000;
+static uint32_t seconds_since(uint32_t last_seen_ms, uint32_t current_ms) {
+    if (last_seen_ms == 0 || current_ms < last_seen_ms) return 9999;
+    return (current_ms - last_seen_ms) / 1000;
 }
 
 static void mark_sensor_seen(void) {
@@ -188,6 +202,18 @@ static size_t build_speed_history_json(char *out, size_t out_size) {
     return pos;
 }
 
+static err_t mqtt_send_message(const char *topic, const char *payload) {
+    if (!g_mqtt_ready || !g_mqtt_client) return ERR_CONN;
+    return mqtt_publish(g_mqtt_client, topic, payload,
+                        (uint16_t)strlen(payload), 0, 0, NULL, NULL);
+}
+
+static bool publish_control_command(const char *command) {
+    char payload[48];
+    snprintf(payload, sizeof(payload), "{\"command\":\"%s\"}", command);
+    return mqtt_send_message(TOPIC_CONTROL, payload) == ERR_OK;
+}
+
 static void on_publish(void *arg, const char *topic, u32_t tot_len) {
     (void)arg;
     (void)tot_len;
@@ -211,6 +237,9 @@ static void on_data(void *arg, const u8_t *data, u16_t len, u8_t flags) {
         g_reps = json_int(g_payload, "reps");
         g_sets = json_int(g_payload, "sets");
         g_active = json_bool(g_payload, "active", false);
+        g_tracking = json_bool(g_payload, "tracking", false);
+        g_sensing = json_bool(g_payload, "sensing", true);
+        g_session_active_sec = (uint32_t)json_int(g_payload, "session_active_sec");
         mark_sensor_seen();
     } else if (strcmp(g_cur_topic, TOPIC_SPEED) == 0) {
         g_speed_ms = json_int(g_payload, "speed_ms");
@@ -225,8 +254,12 @@ static void on_data(void *arg, const u8_t *data, u16_t len, u8_t flags) {
     } else if (strcmp(g_cur_topic, TOPIC_DAILY) == 0) {
         g_daily_reps = json_int(g_payload, "total_reps");
         g_daily_sets = json_int(g_payload, "total_sets");
+        g_daily_active_sec = (uint32_t)json_int(g_payload, "daily_active_sec");
         mark_sensor_seen();
     } else if (strcmp(g_cur_topic, TOPIC_SENSOR_STATUS) == 0) {
+        g_active = json_bool(g_payload, "active", g_active);
+        g_tracking = json_bool(g_payload, "tracking", g_tracking);
+        g_sensing = json_bool(g_payload, "sensing", g_sensing);
         mark_sensor_seen();
     } else if (strcmp(g_cur_topic, TOPIC_DISPLAY_STATUS) == 0) {
         mark_display_seen();
@@ -290,6 +323,9 @@ static int build_status_json(char *out, size_t out_size) {
         "{"
         "\"mqtt_ready\":%s,"
         "\"active\":%s,"
+        "\"tracking\":%s,"
+        "\"sensing\":%s,"
+        "\"sensor_mode\":\"%s\","
         "\"reps\":%d,"
         "\"sets\":%d,"
         "\"target_sets\":%d,"
@@ -300,6 +336,8 @@ static int build_status_json(char *out, size_t out_size) {
         "\"rest_after\":%d,"
         "\"daily_reps\":%d,"
         "\"daily_sets\":%d,"
+        "\"session_active_sec\":%u,"
+        "\"daily_active_sec\":%u,"
         "\"avg_speed\":%d,"
         "\"sensor_status\":\"%s\","
         "\"sensor_online\":%s,"
@@ -311,6 +349,9 @@ static int build_status_json(char *out, size_t out_size) {
         "}",
         g_mqtt_ready ? "true" : "false",
         g_active ? "true" : "false",
+        g_tracking ? "true" : "false",
+        g_sensing ? "true" : "false",
+        g_tracking ? "tracking" : "monitoring",
         g_reps,
         g_sets,
         TARGET_SETS,
@@ -321,6 +362,8 @@ static int build_status_json(char *out, size_t out_size) {
         g_rest_after,
         g_daily_reps,
         g_daily_sets,
+        (unsigned)g_session_active_sec,
+        (unsigned)g_daily_active_sec,
         speed_avg(),
         sensor_state,
         strcmp(sensor_state, "online") == 0 ? "true" : "false",
@@ -341,16 +384,17 @@ static err_t http_close(struct tcp_pcb *tpcb, http_state_t *state) {
     return tcp_close(tpcb);
 }
 
-static err_t http_send_response(struct tcp_pcb *tpcb, const char *content_type, const char *body) {
+static err_t http_send_response(struct tcp_pcb *tpcb, const char *status_line,
+                                const char *content_type, const char *body) {
     char header[256];
     int header_len = snprintf(
         header, sizeof(header),
-        "HTTP/1.1 200 OK\r\n"
+        "HTTP/1.1 %s\r\n"
         "Content-Type: %s\r\n"
         "Cache-Control: no-store\r\n"
         "Connection: close\r\n"
         "Content-Length: %u\r\n\r\n",
-        content_type, (unsigned)strlen(body)
+        status_line, content_type, (unsigned)strlen(body)
     );
 
     err_t err = tcp_write(tpcb, header, (u16_t)header_len, TCP_WRITE_FLAG_COPY);
@@ -361,19 +405,20 @@ static err_t http_send_response(struct tcp_pcb *tpcb, const char *content_type, 
 }
 
 static err_t http_send_not_found(struct tcp_pcb *tpcb) {
-    static const char body[] = "Not Found";
-    char resp[160];
-    int len = snprintf(
-        resp, sizeof(resp),
-        "HTTP/1.1 404 Not Found\r\n"
-        "Content-Type: text/plain\r\n"
-        "Connection: close\r\n"
-        "Content-Length: %u\r\n\r\n%s",
-        (unsigned)strlen(body), body
+    return http_send_response(tpcb, "404 Not Found", "text/plain; charset=utf-8", "Not Found");
+}
+
+static err_t http_send_control_result(struct tcp_pcb *tpcb, bool ok, const char *message) {
+    char body[128];
+    snprintf(body, sizeof(body),
+             "{\"ok\":%s,\"error\":\"%s\"}",
+             ok ? "true" : "false", message);
+    return http_send_response(
+        tpcb,
+        ok ? "200 OK" : "503 Service Unavailable",
+        "application/json; charset=utf-8",
+        body
     );
-    err_t err = tcp_write(tpcb, resp, (u16_t)len, TCP_WRITE_FLAG_COPY);
-    if (err != ERR_OK) return err;
-    return tcp_output(tpcb);
 }
 
 static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
@@ -398,13 +443,19 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
     }
 
     if (strncmp(state->request, "GET /api/status ", 16) == 0) {
-        char json[384];
+        char json[512];
         build_status_json(json, sizeof(json));
-        http_send_response(tpcb, "application/json; charset=utf-8", json);
+        http_send_response(tpcb, "200 OK", "application/json; charset=utf-8", json);
+    } else if (strncmp(state->request, "POST /api/control/start ", 24) == 0) {
+        http_send_control_result(tpcb, publish_control_command("start"),
+                                 g_mqtt_ready ? "" : "mqtt_not_ready");
+    } else if (strncmp(state->request, "POST /api/control/stop ", 23) == 0) {
+        http_send_control_result(tpcb, publish_control_command("stop"),
+                                 g_mqtt_ready ? "" : "mqtt_not_ready");
     } else if (strncmp(state->request, "GET / ", 6) == 0 ||
                strncmp(state->request, "GET /HTTP", 9) == 0 ||
                strncmp(state->request, "GET /index.html ", 16) == 0) {
-        http_send_response(tpcb, "text/html; charset=utf-8", DASHBOARD_HTML);
+        http_send_response(tpcb, "200 OK", "text/html; charset=utf-8", DASHBOARD_HTML);
     } else {
         http_send_not_found(tpcb);
     }

@@ -20,21 +20,8 @@
 #define HCSR04_ECHO_PIN   15
 #define PIR_PIN           16
 
-// 4×4 키패드: 행(출력) / 열(입력 풀업)
-#define KEYPAD_ROW0       2
-#define KEYPAD_ROW1       3
-#define KEYPAD_ROW2       4
-#define KEYPAD_ROW3       5
-#define KEYPAD_COL0       6
-#define KEYPAD_COL1       7
-#define KEYPAD_COL2       8
-#define KEYPAD_COL3       9
-
-// ─── 디스플레이 보드 WS2812 상태등 ────────────────────────────────────────
+// ─── 디스플레이 보드 출력 장치 ─────────────────────────────────────────────
 #define BUZZER_PIN            18    // 디스플레이 보드 버저 핀
-#define WS2812_PIN            12    // 디스플레이 보드 RGB strip 데이터 핀
-#define WS2812_LED_COUNT      8     // 연결한 LED 개수에 맞게 조정
-#define WS2812_IS_RGBW        0
 
 // ─── 운동 파라미터 ───────────────────────────────────────────────────────────
 #define PUSHUP_DOWN_CM        12.0f  // 내려간 기준 (cm)

@@ -2,7 +2,7 @@
  /*
  * 표시 레이아웃 (16×2 문자)
  *   Row 0: R:5  S:2/3 ACTV
- *   Row 1: 1200ms[ok]D:45R
+ *   Row 1: 1200[ok]TD:45
  *
  * MQTT 구독 토픽
  *   fitpico/sensor/count   → reps, sets, active
@@ -25,13 +25,11 @@
 #include "pico/cyw43_arch.h"
 #include "hardware/gpio.h"
 #include "hardware/i2c.h"
-#include "hardware/pio.h"
 
 #include "lwip/apps/mqtt.h"
 #include "lwip/ip_addr.h"
 
 #include "config.h"
-#include "ws2812.pio.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // I2C LCD (PCF8574 백팩) 설정
@@ -48,8 +46,6 @@
 #define LCD_EN  0x04   // P2
 #define LCD_BL  0x08   // P3 백라이트
 // D4~D7 = P4~P7 (상위 니블)
-
-#define WS2812_FREQ 800000
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LCD 드라이버 (HD44780 4-bit via PCF8574)
@@ -139,6 +135,7 @@ static int  g_pay_len       = 0;
 static int  g_reps        = 0;
 static int  g_sets        = 0;
 static bool g_active      = false;
+static bool g_tracking    = false;
 static int  g_speed_ms    = 0;
 static int  g_speed_rep   = 0;
 static char g_warn[8]     = "---";
@@ -149,10 +146,6 @@ static int  g_rest_sec    = 0;
 
 static bool g_dirty = true;
 static bool g_wifi_ready = false;
-
-static PIO  g_ws2812_pio    = pio0;
-static int  g_ws2812_sm     = -1;
-static bool g_ws2812_ready  = false;
 
 static const uint32_t WIFI_AUTH_MODES[] = {
     CYW43_AUTH_WPA2_AES_PSK,
@@ -170,6 +163,7 @@ typedef struct display_state {
     int reps;
     int sets;
     bool active;
+    bool tracking;
     int speed_ms;
     const char *warn;
     int daily_reps;
@@ -179,64 +173,12 @@ typedef struct session_snapshot {
     int reps;
     int sets;
     bool active;
+    bool tracking;
 } session_snapshot_t;
 
-static void put_pixel(uint32_t pixel_grb) {
-    if (!g_ws2812_ready) return;
-    pio_sm_put_blocking(g_ws2812_pio, (uint)g_ws2812_sm, pixel_grb << 8u);
-}
-
-static uint32_t urgb_u32(uint8_t r, uint8_t g, uint8_t b) {
-    return ((uint32_t)g << 16) | ((uint32_t)r << 8) | (uint32_t)b;
-}
-
-static void ws2812_fill(uint8_t r, uint8_t g, uint8_t b) {
-    uint32_t color = urgb_u32(r, g, b);
-    for (int i = 0; i < WS2812_LED_COUNT; i++) {
-        put_pixel(color);
-    }
-}
-
-static void ws2812_init_strip(void) {
-    g_ws2812_sm = pio_claim_unused_sm(g_ws2812_pio, false);
-    if (g_ws2812_sm < 0) {
-        printf("[RGB] No available PIO state machine.\n");
-        return;
-    }
-    uint offset = pio_add_program(g_ws2812_pio, &ws2812_program);
-    ws2812_program_init(g_ws2812_pio, (uint)g_ws2812_sm, offset,
-                        WS2812_PIN, WS2812_FREQ, WS2812_IS_RGBW);
-    g_ws2812_ready = true;
-    ws2812_fill(0, 0, 0);
-}
-
-static void update_status_led(void) {
-    if (!g_ws2812_ready) return;
-
-    if (!g_wifi_ready) {
-        ws2812_fill(255, 80, 0);
-        return;
-    }
-    if (!g_mqtt_ready) {
-        ws2812_fill(0, 80, 255);
-        return;
-    }
-    if (g_sets >= TARGET_SETS && !g_active) {
-        ws2812_fill(180, 0, 255);
-        return;
-    }
-    if (g_active) {
-        if (strcmp(g_warn, "fast") == 0) {
-            ws2812_fill(255, 180, 0);
-        } else if (strcmp(g_warn, "slow") == 0) {
-            ws2812_fill(255, 0, 0);
-        } else {
-            ws2812_fill(0, 180, 0);
-        }
-        return;
-    }
-    ws2812_fill(0, 0, 180);
-}
+#define BUZZER_TONE_HZ 2400
+#define BUZZER_BEEP_MS 120
+#define BUZZER_GAP_MS  120
 
 static void init_lcd_bus(void) {
     i2c_init(LCD_I2C, 100000);
@@ -249,8 +191,6 @@ static void init_lcd_bus(void) {
 }
 
 static void init_display_outputs(void) {
-    ws2812_init_strip();
-
     gpio_init(BUZZER_PIN);
     gpio_set_dir(BUZZER_PIN, GPIO_OUT);
     gpio_put(BUZZER_PIN, 0);
@@ -263,6 +203,7 @@ static display_state_t current_display_state(void) {
         .reps = g_reps,
         .sets = g_sets,
         .active = g_active,
+        .tracking = g_tracking,
         .speed_ms = g_speed_ms,
         .warn = g_warn,
         .daily_reps = g_daily_reps,
@@ -275,6 +216,7 @@ static session_snapshot_t current_session_snapshot(void) {
         .reps = g_reps,
         .sets = g_sets,
         .active = g_active,
+        .tracking = g_tracking,
     };
     return snapshot;
 }
@@ -285,12 +227,24 @@ static void mqtt_send(const char *topic, const char *payload) {
                  (uint16_t)strlen(payload), 0, 0, NULL, NULL);
 }
 
+static void buzzer_tone(uint32_t frequency_hz, uint32_t duration_ms) {
+    if (frequency_hz == 0 || duration_ms == 0) return;
+
+    const uint32_t half_period_us = 500000u / frequency_hz;
+    const uint32_t cycles = (frequency_hz * duration_ms) / 1000u;
+
+    for (uint32_t i = 0; i < cycles; i++) {
+        gpio_put(BUZZER_PIN, 1);
+        sleep_us(half_period_us);
+        gpio_put(BUZZER_PIN, 0);
+        sleep_us(half_period_us);
+    }
+}
+
 static void buzzer_beep(int count) {
     for (int i = 0; i < count; i++) {
-        gpio_put(BUZZER_PIN, 1);
-        sleep_ms(100);
-        gpio_put(BUZZER_PIN, 0);
-        sleep_ms(150);
+        buzzer_tone(BUZZER_TONE_HZ, BUZZER_BEEP_MS);
+        sleep_ms(BUZZER_GAP_MS);
     }
 }
 
@@ -313,10 +267,11 @@ static bool connect_wifi_with_fallbacks(void) {
 static void publish_display_heartbeat(void) {
     char buf[160];
     snprintf(buf, sizeof(buf),
-             "{\"device\":\"display\",\"online\":true,\"wifi\":%s,\"mqtt\":%s,\"active\":%s,\"warn\":\"%s\"}",
+             "{\"device\":\"display\",\"online\":true,\"wifi\":%s,\"mqtt\":%s,\"active\":%s,\"tracking\":%s,\"warn\":\"%s\"}",
              g_wifi_ready ? "true" : "false",
              g_mqtt_ready ? "true" : "false",
              g_active ? "true" : "false",
+             g_tracking ? "true" : "false",
              g_warn);
     mqtt_send(TOPIC_DISPLAY_STATUS, buf);
 }
@@ -365,7 +320,8 @@ static void handle_session_output(session_snapshot_t previous,
         return;
     }
 
-    if (previous.active && !current.active && current.reps == 0 && current.sets == 0) {
+    if (previous.active && !current.active &&
+        current.reps == 0 && current.sets == 0 && !current.tracking) {
         buzzer_beep(2);
         return;
     }
@@ -410,6 +366,7 @@ static void on_data(void *arg, const u8_t *data, u16_t len, u8_t flags) {
         g_reps = json_int(g_payload, "reps");
         g_sets = json_int(g_payload, "sets");
         g_active = json_bool(g_payload, "active", false);
+        g_tracking = json_bool(g_payload, "tracking", false);
         handle_session_output(previous_session, current_session_snapshot());
     } else if (strcmp(g_cur_topic, TOPIC_SPEED) == 0) {
         g_speed_rep = json_int(g_payload, "rep");
@@ -429,13 +386,14 @@ static void on_data(void *arg, const u8_t *data, u16_t len, u8_t flags) {
 static void render_display(void) {
     char line[17];
     display_state_t state = current_display_state();
+    const char *status = state.active ? "ACTV" : (state.tracking ? "PAUS" : "MONI");
 
     snprintf(line, sizeof(line), "R:%-2d S:%d/%d %s",
              state.reps, state.sets, TARGET_SETS,
-             state.active ? "ACTV" : "IDLE");
+             status);
     lcd_puts_line(0, line);
 
-    snprintf(line, sizeof(line), "%dms[%s]D:%dR",
+    snprintf(line, sizeof(line), "%d[%s]TD:%d",
              state.speed_ms, state.warn, state.daily_reps);
     lcd_puts_line(1, line);
 }
@@ -451,12 +409,10 @@ static void on_connect(mqtt_client_t *client, void *arg,
     if (status != MQTT_CONNECT_ACCEPTED) {
         printf("[MQTT] Connection failed (status=%d)\n", status);
         g_mqtt_ready = false;
-        update_status_led();
         return;
     }
     printf("[MQTT] Connected\n");
     g_mqtt_ready = true;
-    update_status_led();
     mqtt_set_inpub_callback(client, on_publish, on_data, NULL);
     mqtt_subscribe(client, TOPIC_COUNT, 0, on_sub, NULL);
     mqtt_subscribe(client, TOPIC_SPEED, 0, on_sub, NULL);
@@ -479,12 +435,11 @@ static void mqtt_connect_broker(void) {
 // ─────────────────────────────────────────────────────────────────────────────
 // 디스플레이 갱신  (16×2)
 //   Row 0: "R:5  S:2/3 ACTV"   (최대 16자)
-//   Row 1: "1200ms[ok]D:45R "  (최대 16자)
+//   Row 1: "1200[ok]TD:45  "   (최대 16자)
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void display_update(void) {
     render_display();
-    update_status_led();
     g_dirty = false;
 }
 
@@ -498,14 +453,12 @@ int main(void) {
     printf("=== FitPico Display Node ===\n");
 
     init_display_outputs();
-    update_status_led();
     lcd_puts_line(0, "=== FitPico ===");
     lcd_puts_line(1, "WiFi connecting");
 
     if (cyw43_arch_init()) {
         printf("[WiFi] Init failed\n");
         lcd_puts_line(1, "WiFi init failed");
-        ws2812_fill(255, 0, 0);
         return 1;
     }
     cyw43_arch_enable_sta_mode();
@@ -513,12 +466,10 @@ int main(void) {
     if (!connect_wifi_with_fallbacks()) {
         printf("[WiFi] Connection failed\n");
         lcd_puts_line(1, "WiFi failed     ");
-        ws2812_fill(255, 0, 0);
         return 1;
     }
     printf("[WiFi] Connection complete\n");
     g_wifi_ready = true;
-    update_status_led();
     lcd_puts_line(1, "WiFi connected ");
 
     mqtt_connect_broker();

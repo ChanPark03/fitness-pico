@@ -6,6 +6,16 @@ if (NOT PICO_SDK_PATH AND NOT DEFINED ENV{PICO_SDK_PATH})
 set(PICO_SDK_PATH "${CMAKE_CURRENT_LIST_DIR}/../deps/pico-sdk" CACHE PATH "Path to the Raspberry Pi Pico SDK")
 endif()
 
+if (NOT PICOTOOL_FETCH_FROM_GIT_PATH AND NOT DEFINED ENV{PICOTOOL_FETCH_FROM_GIT_PATH})
+set(_FITPICO_LOCAL_PICOTOOL_DIR "${CMAKE_CURRENT_LIST_DIR}/../build/sensor/_deps")
+if (EXISTS "${_FITPICO_LOCAL_PICOTOOL_DIR}/picotool/picotool")
+set(PICOTOOL_FETCH_FROM_GIT_PATH "${_FITPICO_LOCAL_PICOTOOL_DIR}" CACHE PATH "Shared picotool cache" FORCE)
+else()
+set(PICOTOOL_FETCH_FROM_GIT_PATH "${CMAKE_CURRENT_LIST_DIR}/../.pico-tools" CACHE PATH "Shared picotool cache" FORCE)
+endif()
+unset(_FITPICO_LOCAL_PICOTOOL_DIR)
+endif()
+
 set(PICO_BOARD pico2_w CACHE STRING "Board type")
 
 include(pico_sdk_import.cmake)
@@ -75,20 +85,14 @@ pico_enable_stdio_usb(fitpico_sensor 1)
 pico_enable_stdio_uart(fitpico_sensor 0)
 pico_add_extra_outputs(fitpico_sensor)
 
-# ── 팀원 B: 디스플레이 노드 (I2C LCD + WS2812) ────────────────────────────
+# ── 팀원 B: 디스플레이 노드 (I2C LCD + Buzzer) ────────────────────────────
 add_executable(fitpico_display
     src/main_display.c
-)
-
-# WS2812는 PIO 프로그램이 필요하므로 전용 헤더를 생성한다.
-pico_generate_pio_header(fitpico_display
-    ${PICO_SDK_PATH}/src/rp2_common/pico_status_led/ws2812.pio
 )
 
 target_link_libraries(fitpico_display
     pico_stdlib
     hardware_i2c
-    hardware_pio
     pico_cyw43_arch_lwip_threadsafe_background
     pico_lwip_mqtt
 )
