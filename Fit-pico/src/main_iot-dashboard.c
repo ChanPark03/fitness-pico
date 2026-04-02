@@ -22,6 +22,9 @@
 
 static mqtt_client_t *g_mqtt_client = NULL;
 static bool g_mqtt_ready = false;
+static bool g_wifi_ready = false;
+static bool g_mqtt_connecting = false;
+static uint32_t g_last_mqtt_attempt_ms = 0;
 
 static char g_cur_topic[64] = {0};
 static char g_payload[256] = {0};
@@ -166,6 +169,20 @@ static uint32_t now_ms(void) {
     return to_ms_since_boot(get_absolute_time());
 }
 
+static const char *mqtt_status_name(mqtt_connection_status_t status) {
+    switch (status) {
+        case MQTT_CONNECT_ACCEPTED: return "ACCEPTED";
+        case MQTT_CONNECT_REFUSED_PROTOCOL_VERSION: return "REFUSED_PROTOCOL_VERSION";
+        case MQTT_CONNECT_REFUSED_IDENTIFIER: return "REFUSED_IDENTIFIER";
+        case MQTT_CONNECT_REFUSED_SERVER: return "REFUSED_SERVER";
+        case MQTT_CONNECT_REFUSED_USERNAME_PASS: return "REFUSED_USERNAME_PASS";
+        case MQTT_CONNECT_REFUSED_NOT_AUTHORIZED_: return "REFUSED_NOT_AUTHORIZED";
+        case MQTT_CONNECT_DISCONNECTED: return "DISCONNECTED";
+        case MQTT_CONNECT_TIMEOUT: return "TIMEOUT";
+        default: return "UNKNOWN";
+    }
+}
+
 static uint32_t seconds_since(uint32_t last_seen_ms, uint32_t current_ms) {
     if (last_seen_ms == 0 || current_ms < last_seen_ms) return 9999;
     return (current_ms - last_seen_ms) / 1000;
@@ -281,12 +298,15 @@ static void subscribe_dashboard_topics(mqtt_client_t *client) {
 
 static void on_connect(mqtt_client_t *client, void *arg, mqtt_connection_status_t status) {
     (void)arg;
+    g_mqtt_connecting = false;
     if (status != MQTT_CONNECT_ACCEPTED) {
-        printf("[MQTT] 연결 실패 (status=%d)\n", status);
+        printf("[MQTT] 연결 실패 (%s, %d)\n",
+               mqtt_status_name(status), status);
         g_mqtt_ready = false;
         return;
     }
-    printf("[MQTT] 브로커 연결 성공\n");
+    printf("[MQTT] 브로커 연결 성공 (%s, %d)\n",
+           mqtt_status_name(status), status);
     g_mqtt_ready = true;
     mqtt_set_inpub_callback(client, on_publish, on_data, NULL);
     subscribe_dashboard_topics(client);
@@ -294,16 +314,43 @@ static void on_connect(mqtt_client_t *client, void *arg, mqtt_connection_status_
 
 static void mqtt_connect_broker(void) {
     ip_addr_t broker;
-    if (!ip4addr_aton(MQTT_BROKER_IP, &broker)) return;
-    g_mqtt_client = mqtt_client_new();
-    if (!g_mqtt_client) return;
+    g_last_mqtt_attempt_ms = now_ms();
+    printf("[MQTT] 연결 요청 -> %s:%d\n", MQTT_BROKER_IP, MQTT_BROKER_PORT);
+    if (!ip4addr_aton(MQTT_BROKER_IP, &broker)) {
+        printf("[MQTT] 잘못된 브로커 IP: %s\n", MQTT_BROKER_IP);
+        return;
+    }
+    if (!g_mqtt_client) {
+        g_mqtt_client = mqtt_client_new();
+    }
+    if (!g_mqtt_client) {
+        printf("[MQTT] 클라이언트 생성 실패\n");
+        return;
+    }
 
     struct mqtt_connect_client_info_t ci = {
         .client_id = "fitpico_dashboard",
         .keep_alive = 60,
     };
 
-    mqtt_client_connect(g_mqtt_client, &broker, MQTT_BROKER_PORT, on_connect, NULL, &ci);
+    g_mqtt_connecting = true;
+    err_t err = mqtt_client_connect(g_mqtt_client, &broker, MQTT_BROKER_PORT, on_connect, NULL, &ci);
+    printf("[MQTT] 연결 요청 결과: %d\n", err);
+    if (err != ERR_OK) {
+        g_mqtt_connecting = false;
+        printf("[MQTT] 연결 요청 즉시 실패: %d\n", err);
+    }
+}
+
+static void maintain_mqtt_connection(uint32_t current_ms) {
+    if (!g_wifi_ready) return;
+    if (g_mqtt_ready && g_mqtt_client && !mqtt_client_is_connected(g_mqtt_client)) {
+        printf("[MQTT] 연결 상태 유실, 재연결 예약\n");
+        g_mqtt_ready = false;
+    }
+    if (g_mqtt_ready || g_mqtt_connecting) return;
+    if ((current_ms - g_last_mqtt_attempt_ms) < MQTT_RECONNECT_INTERVAL_MS) return;
+    mqtt_connect_broker();
 }
 
 static int build_status_json(char *out, size_t out_size) {
@@ -621,6 +668,7 @@ int main(void) {
     }
 
     printf("[WiFi] 연결 완료\n");
+    g_wifi_ready = true;
     if (netif_default) {
         printf("[HTTP] 브라우저에서 열기: http://%s/\n", ip4addr_ntoa(netif_ip4_addr(netif_default)));
     }
@@ -634,6 +682,7 @@ int main(void) {
 
     while (true) {
         cyw43_arch_poll();
+        maintain_mqtt_connection(now_ms());
         sleep_ms(20);
     }
 

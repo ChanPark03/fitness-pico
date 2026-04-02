@@ -1,6 +1,9 @@
 #pragma once
 
 // ─── MQTT 브로커 ────────────────────────────────────────────────────────────
+// 우선순위:
+//   1) 빌드 시 -DMQTT_SERVER="x.x.x.x" 또는 환경 변수 MQTT_SERVER
+//   2) 아래 기본값
 #ifndef MQTT_BROKER_IP
 #ifdef MQTT_SERVER
 #define MQTT_BROKER_IP    MQTT_SERVER
@@ -43,5 +46,6 @@
 
 // ─── 주기 설정 ──────────────────────────────────────────────────────────────
 #define MQTT_PUBLISH_INTERVAL_MS     2000  // MQTT publish 주기 (ms)
+#define MQTT_RECONNECT_INTERVAL_MS   5000  // MQTT 재연결 시도 간격
 #define DEVICE_HEARTBEAT_INTERVAL_MS 3000  // 각 보드 heartbeat 전송 주기
 #define BOARD_OFFLINE_TIMEOUT_MS     8000  // heartbeat 미수신 시 오프라인 판정 기준

@@ -41,6 +41,9 @@ typedef struct periodic_state {
 
 static mqtt_client_t *g_mqtt_client = NULL;
 static bool           g_mqtt_ready  = false;
+static bool           g_wifi_ready  = false;
+static bool           g_mqtt_connecting = false;
+static uint32_t       g_last_mqtt_attempt_ms = 0;
 
 static char g_cur_topic[64] = {0};
 static char g_payload[128]  = {0};
@@ -75,6 +78,20 @@ static const char *const WIFI_AUTH_NAMES[] = {
 
 static uint32_t now_ms(void) {
     return to_ms_since_boot(get_absolute_time());
+}
+
+static const char *mqtt_status_name(mqtt_connection_status_t status) {
+    switch (status) {
+        case MQTT_CONNECT_ACCEPTED: return "ACCEPTED";
+        case MQTT_CONNECT_REFUSED_PROTOCOL_VERSION: return "REFUSED_PROTOCOL_VERSION";
+        case MQTT_CONNECT_REFUSED_IDENTIFIER: return "REFUSED_IDENTIFIER";
+        case MQTT_CONNECT_REFUSED_SERVER: return "REFUSED_SERVER";
+        case MQTT_CONNECT_REFUSED_USERNAME_PASS: return "REFUSED_USERNAME_PASS";
+        case MQTT_CONNECT_REFUSED_NOT_AUTHORIZED_: return "REFUSED_NOT_AUTHORIZED";
+        case MQTT_CONNECT_DISCONNECTED: return "DISCONNECTED";
+        case MQTT_CONNECT_TIMEOUT: return "TIMEOUT";
+        default: return "UNKNOWN";
+    }
 }
 
 static void json_str(const char *json, const char *key, char *out, int sz) {
@@ -388,8 +405,10 @@ static void mqtt_sub_cb(void *arg, err_t result) {
 static void mqtt_connection_cb(mqtt_client_t *client, void *arg,
                                mqtt_connection_status_t status) {
     (void)arg;
+    g_mqtt_connecting = false;
     if (status == MQTT_CONNECT_ACCEPTED) {
-        printf("[MQTT] Broker connected\n");
+        printf("[MQTT] Broker connected (%s, %d)\n",
+               mqtt_status_name(status), status);
         g_mqtt_ready = true;
         mqtt_set_inpub_callback(client, mqtt_incoming_pub_cb, mqtt_incoming_data_cb, NULL);
         mqtt_subscribe(client, TOPIC_CONTROL, 0, mqtt_sub_cb, NULL);
@@ -397,7 +416,8 @@ static void mqtt_connection_cb(mqtt_client_t *client, void *arg,
         publish_rest_state(0);
         publish_heartbeat();
     } else {
-        printf("[MQTT] Connect failed (status=%d)\n", status);
+        printf("[MQTT] Connect failed (%s, %d)\n",
+               mqtt_status_name(status), status);
         g_mqtt_ready = false;
     }
 }
@@ -420,11 +440,15 @@ static bool connect_wifi_with_fallbacks(void) {
 
 static void mqtt_connect_broker(void) {
     ip_addr_t broker;
+    g_last_mqtt_attempt_ms = now_ms();
+    printf("[MQTT] Connect request -> %s:%d\n", MQTT_BROKER_IP, MQTT_BROKER_PORT);
     if (!ip4addr_aton(MQTT_BROKER_IP, &broker)) {
         printf("[MQTT] Invalid broker IP: %s\n", MQTT_BROKER_IP);
         return;
     }
-    g_mqtt_client = mqtt_client_new();
+    if (!g_mqtt_client) {
+        g_mqtt_client = mqtt_client_new();
+    }
     if (!g_mqtt_client) {
         printf("[MQTT] Client allocation failed\n");
         return;
@@ -438,9 +462,25 @@ static void mqtt_connect_broker(void) {
         .will_topic  = NULL,
     };
 
+    g_mqtt_connecting = true;
     err_t err = mqtt_client_connect(g_mqtt_client, &broker, MQTT_BROKER_PORT,
                                     mqtt_connection_cb, NULL, &ci);
-    if (err != ERR_OK) printf("[MQTT] Connect request failed: %d\n", err);
+    printf("[MQTT] Connect request result: %d\n", err);
+    if (err != ERR_OK) {
+        g_mqtt_connecting = false;
+        printf("[MQTT] Connect request failed immediately: %d\n", err);
+    }
+}
+
+static void maintain_mqtt_connection(uint32_t current_ms) {
+    if (!g_wifi_ready) return;
+    if (g_mqtt_ready && g_mqtt_client && !mqtt_client_is_connected(g_mqtt_client)) {
+        printf("[MQTT] Client lost connection, scheduling reconnect\n");
+        g_mqtt_ready = false;
+    }
+    if (g_mqtt_ready || g_mqtt_connecting) return;
+    if ((current_ms - g_last_mqtt_attempt_ms) < MQTT_RECONNECT_INTERVAL_MS) return;
+    mqtt_connect_broker();
 }
 
 static void publish_periodic_updates(uint32_t current_ms, periodic_state_t *state) {
@@ -486,6 +526,7 @@ int main(void) {
         printf("[WiFi] Connection failed - MQTT disabled\n");
     } else {
         printf("[WiFi] Connected\n");
+        g_wifi_ready = true;
         mqtt_connect_broker();
         sleep_ms(1000);
     }
@@ -498,6 +539,7 @@ int main(void) {
         cyw43_arch_poll();
 
         uint32_t current_ms = now_ms();
+        maintain_mqtt_connection(current_ms);
         poll_inputs_and_motion(current_ms);
         publish_periodic_updates(current_ms, &periodic);
 
