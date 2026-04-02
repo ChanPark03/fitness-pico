@@ -1,11 +1,15 @@
 # 빌드 산출물
 Fit-pico/build/
+Fit-pico/build-lan/
 build/
 *.uf2
 *.elf
 *.bin
 *.map
 *.hex
+
+# 로그
+mosquitto-lan.log
 
 # Python
 __pycache__/
@@ -21,3 +25,8 @@ secrets.py
 # IDE
 .vscode/settings.json
 .worktrees/
+
+# Local agent/tooling state
+.superpowers/
+.claude/
+.codex
