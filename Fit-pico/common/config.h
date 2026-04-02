@@ -11,6 +11,16 @@
 #define MQTT_BROKER_IP    "163.152.213.101"
 #endif
 #endif
+#ifdef MQTT_USERNAME
+#define MQTT_BROKER_USERNAME MQTT_USERNAME
+#else
+#define MQTT_BROKER_USERNAME ""
+#endif
+#ifdef MQTT_PASSWORD
+#define MQTT_BROKER_PASSWORD MQTT_PASSWORD
+#else
+#define MQTT_BROKER_PASSWORD ""
+#endif
 #define MQTT_BROKER_PORT  1883
 
 // ─── MQTT 토픽 ──────────────────────────────────────────────────────────────

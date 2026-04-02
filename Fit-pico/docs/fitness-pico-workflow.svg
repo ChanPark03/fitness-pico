@@ -1,0 +1,157 @@
+<svg width="1600" height="980" viewBox="0 0 1600 980" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="120" y1="80" x2="1480" y2="920" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7F4EC"/>
+      <stop offset="1" stop-color="#E8F0EE"/>
+    </linearGradient>
+    <linearGradient id="sensorGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#FFF5D8"/>
+      <stop offset="1" stop-color="#F6D365"/>
+    </linearGradient>
+    <linearGradient id="brokerGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#D9F4F0"/>
+      <stop offset="1" stop-color="#61C2B3"/>
+    </linearGradient>
+    <linearGradient id="dashboardGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#E6F1FF"/>
+      <stop offset="1" stop-color="#79AFFF"/>
+    </linearGradient>
+    <linearGradient id="displayGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#FDE7E3"/>
+      <stop offset="1" stop-color="#F08A7E"/>
+    </linearGradient>
+    <linearGradient id="browserGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#F1E8FF"/>
+      <stop offset="1" stop-color="#B894F6"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#0C1A1A" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrowTeal" markerWidth="14" markerHeight="14" refX="12" refY="7" orient="auto">
+      <path d="M0 0L14 7L0 14V0Z" fill="#14807A"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="14" markerHeight="14" refX="12" refY="7" orient="auto">
+      <path d="M0 0L14 7L0 14V0Z" fill="#2D6CDF"/>
+    </marker>
+    <marker id="arrowCoral" markerWidth="14" markerHeight="14" refX="12" refY="7" orient="auto">
+      <path d="M0 0L14 7L0 14V0Z" fill="#D85A4A"/>
+    </marker>
+    <marker id="arrowPurple" markerWidth="14" markerHeight="14" refX="12" refY="7" orient="auto">
+      <path d="M0 0L14 7L0 14V0Z" fill="#8B5CF6"/>
+    </marker>
+    <style>
+      .title { font: 700 38px 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; fill: #122027; }
+      .subtitle { font: 500 18px 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; fill: #55636B; }
+      .boxTitle { font: 700 28px 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; fill: #122027; }
+      .boxMeta { font: 600 16px 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; fill: #35515A; }
+      .body { font: 500 18px 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; fill: #1E3138; }
+      .small { font: 500 15px 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; fill: #41555D; }
+      .chip { font: 700 13px 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; fill: #183239; }
+      .arrowLabel { font: 700 16px 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; fill: #17343A; }
+      .stepNum { font: 800 18px 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; fill: white; }
+      .stepText { font: 600 17px 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; fill: #163039; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1600" height="980" fill="url(#bg)"/>
+  <circle cx="1420" cy="120" r="180" fill="#FFFFFF" fill-opacity="0.5"/>
+  <circle cx="170" cy="820" r="210" fill="#FFF7DA" fill-opacity="0.55"/>
+
+  <text x="90" y="86" class="title">fitness-pico 프로그램 워크플로우</text>
+  <text x="90" y="118" class="subtitle">센서 보드, 대시보드 보드, 디스플레이 보드, 브로커 노트북, 브라우저가 MQTT와 HTTP로 협업하는 흐름</text>
+
+  <g filter="url(#shadow)">
+    <rect x="70" y="190" width="360" height="360" rx="34" fill="url(#sensorGrad)" stroke="#D5B85F" stroke-width="2"/>
+    <text x="98" y="246" class="boxTitle">1. Sensor Node</text>
+    <text x="98" y="276" class="boxMeta">Pico W + HC-SR04 + MFRC522</text>
+    <rect x="98" y="302" width="138" height="34" rx="17" fill="#FFF7E4"/><text x="116" y="324" class="chip">초음파 측정</text>
+    <rect x="246" y="302" width="138" height="34" rx="17" fill="#FFF7E4"/><text x="277" y="324" class="chip">RFID 태그</text>
+    <text x="98" y="372" class="body">• 푸시업 자세와 반복 수 계산</text>
+    <text x="98" y="404" class="body">• RFID UID 읽기 후 MQTT 전송</text>
+    <text x="98" y="436" class="body">• 세트, 속도, 일일 누적 상태 발행</text>
+    <text x="98" y="486" class="small">발행 토픽</text>
+    <text x="98" y="514" class="small">fitpico/sensor/count, speed, rest, daily, status</text>
+    <text x="98" y="542" class="small">fitpico/rfid/uid</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="550" y="120" width="500" height="260" rx="34" fill="url(#brokerGrad)" stroke="#4F9E95" stroke-width="2"/>
+    <text x="580" y="178" class="boxTitle">2. MQTT Broker</text>
+    <text x="580" y="208" class="boxMeta">이 노트북의 Mosquitto</text>
+    <rect x="580" y="236" width="226" height="38" rx="19" fill="#ECFFFB"/><text x="607" y="261" class="chip">172.30.1.29:1883</text>
+    <rect x="820" y="236" width="174" height="38" rx="19" fill="#ECFFFB"/><text x="855" y="261" class="chip">allow_anonymous</text>
+    <text x="580" y="316" class="body">• Sensor / Dashboard / Display 사이의</text>
+    <text x="580" y="346" class="body">  상태, 제어, 사용자 전환 메시지를 중계</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1120" y="120" width="390" height="280" rx="34" fill="url(#browserGrad)" stroke="#8B5CF6" stroke-width="2"/>
+    <text x="1150" y="178" class="boxTitle">3. Browser</text>
+    <text x="1150" y="208" class="boxMeta">PC / 모바일 브라우저</text>
+    <rect x="1150" y="236" width="306" height="38" rx="19" fill="#F8F1FF"/><text x="1176" y="261" class="chip">http://fitpico-dashboard.local/</text>
+    <text x="1150" y="314" class="body">• 운동 시작 / 종료 버튼</text>
+    <text x="1150" y="346" class="body">• RFID 등록 대기, 이름 입력, 사용자 등록</text>
+    <text x="1150" y="378" class="body">• 세션 상태와 누적 통계 확인</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="560" y="470" width="520" height="330" rx="34" fill="url(#dashboardGrad)" stroke="#5A92E4" stroke-width="2"/>
+    <text x="590" y="528" class="boxTitle">4. Dashboard Node</text>
+    <text x="590" y="558" class="boxMeta">Pico W + HTTP 서버 + mDNS + Flash 사용자 저장소</text>
+    <text x="590" y="618" class="body">• MQTT로 센서/디스플레이 상태 수신</text>
+    <text x="590" y="650" class="body">• 브라우저 요청 처리: /api/status, /api/users</text>
+    <text x="590" y="682" class="body">• scan mode에서 UID 캡처 후 사용자 등록</text>
+    <text x="590" y="714" class="body">• 등록 완료 시 현재 사용자 전환 메시지 발행</text>
+    <text x="590" y="762" class="small">구독: count, speed, rest, daily, sensor/display status, rfid/uid</text>
+    <text x="590" y="790" class="small">발행: fitpico/control, fitpico/rfid/user</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1140" y="520" width="370" height="260" rx="34" fill="url(#displayGrad)" stroke="#D85A4A" stroke-width="2"/>
+    <text x="1170" y="578" class="boxTitle">5. Display Node</text>
+    <text x="1170" y="608" class="boxMeta">Pico W + LCD + Buzzer</text>
+    <text x="1170" y="668" class="body">• 반복/세트/속도 표시</text>
+    <text x="1170" y="700" class="body">• 목표 달성 / 경고 상태 알림</text>
+    <text x="1170" y="732" class="body">• RFID 사용자 이름 표시</text>
+    <text x="1170" y="760" class="small">구독: count, speed, daily, rfid/user</text>
+  </g>
+
+  <path d="M430 302C500 290 516 268 550 250" stroke="#14807A" stroke-width="7" stroke-linecap="round" marker-end="url(#arrowTeal)"/>
+  <text x="414" y="255" class="arrowLabel">센서 데이터 + RFID UID 발행</text>
+
+  <path d="M1050 245C1080 245 1095 245 1120 245" stroke="#8B5CF6" stroke-width="7" stroke-linecap="round" marker-end="url(#arrowPurple)"/>
+  <text x="1080" y="222" class="arrowLabel">mDNS / HTTP 안내</text>
+
+  <path d="M1310 400C1280 452 1210 487 1080 540" stroke="#2D6CDF" stroke-width="7" stroke-linecap="round" marker-end="url(#arrowBlue)"/>
+  <text x="1198" y="446" class="arrowLabel">HTTP 요청</text>
+
+  <path d="M1080 602C1160 610 1194 620 1140 626" stroke="#2D6CDF" stroke-width="7" stroke-linecap="round" marker-end="url(#arrowBlue)"/>
+  <text x="1088" y="588" class="arrowLabel">JSON 응답</text>
+
+  <path d="M804 380V470" stroke="#14807A" stroke-width="7" stroke-linecap="round" marker-end="url(#arrowTeal)"/>
+  <text x="832" y="438" class="arrowLabel">센서 상태 수신</text>
+
+  <path d="M1030 636C1080 636 1100 636 1140 636" stroke="#D85A4A" stroke-width="7" stroke-linecap="round" marker-end="url(#arrowCoral)"/>
+  <text x="1048" y="612" class="arrowLabel">사용자 전환 / 표시 데이터</text>
+
+  <path d="M1140 690C1080 690 1060 690 1080 690" stroke="#D85A4A" stroke-width="7" stroke-linecap="round" marker-end="url(#arrowCoral)"/>
+  <text x="1090" y="720" class="arrowLabel">display status</text>
+
+  <path d="M820 470C820 430 820 410 820 380" stroke="#2D6CDF" stroke-width="7" stroke-linecap="round" marker-end="url(#arrowBlue)"/>
+  <text x="845" y="420" class="arrowLabel">control / rfid user 발행</text>
+
+  <path d="M430 460C500 520 520 558 560 600" stroke="#14807A" stroke-width="5" stroke-dasharray="10 12" stroke-linecap="round" marker-end="url(#arrowTeal)"/>
+  <text x="396" y="510" class="small">운동 중 상태 업데이트</text>
+
+  <g filter="url(#shadow)">
+    <rect x="90" y="838" width="1420" height="92" rx="28" fill="#FFFFFF" fill-opacity="0.84" stroke="#D7E0DE"/>
+    <circle cx="150" cy="884" r="22" fill="#0F766E"/><text x="143" y="891" class="stepNum">1</text>
+    <text x="186" y="890" class="stepText">센서 보드가 초음파로 운동 상태를 읽고, RFID 카드 UID를 감지합니다.</text>
+    <circle cx="560" cy="884" r="22" fill="#2D6CDF"/><text x="553" y="891" class="stepNum">2</text>
+    <text x="596" y="890" class="stepText">브로커가 MQTT 토픽으로 상태와 UID를 중계합니다.</text>
+    <circle cx="938" cy="884" r="22" fill="#8B5CF6"/><text x="931" y="891" class="stepNum">3</text>
+    <text x="974" y="890" class="stepText">브라우저가 대시보드에 등록 요청을 보내고, 대시보드는 Flash에 사용자를 저장합니다.</text>
+    <circle cx="1372" cy="884" r="22" fill="#D85A4A"/><text x="1365" y="891" class="stepNum">4</text>
+    <text x="1408" y="890" class="stepText">디스플레이 보드가 현재 사용자와 운동 상태를 시각/음향으로 보여줍니다.</text>
+  </g>
+</svg>

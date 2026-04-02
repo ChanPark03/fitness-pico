@@ -49,9 +49,10 @@ typedef struct {
     int      sets_at_login;
 } user_stats_t;
 
-#define HTTP_REQ_BUF_SIZE 768
+#define HTTP_REQ_BUF_SIZE 2048
 #define DASHBOARD_HOSTNAME "fitpico-dashboard"
 #define SPEED_HISTORY 5
+#define DASHBOARD_TOPIC_COUNT 7
 
 static mqtt_client_t *g_mqtt_client = NULL;
 static bool g_mqtt_ready = false;
@@ -96,6 +97,17 @@ static int          g_user_count            = 0;
 static int          g_current_user          = -1;   // -1 = 미로그인
 static bool         g_scan_mode             = false;
 static char         g_pending_uid[12]       = {0};
+static size_t       g_dashboard_subscribe_index = 0;
+
+static const char *const g_dashboard_topics[DASHBOARD_TOPIC_COUNT] = {
+    TOPIC_COUNT,
+    TOPIC_SPEED,
+    TOPIC_REST,
+    TOPIC_DAILY,
+    TOPIC_SENSOR_STATUS,
+    TOPIC_DISPLAY_STATUS,
+    TOPIC_RFID_UID,
+};
 
 static const char DASHBOARD_HTML[] =
 "<!doctype html>\n"
@@ -154,8 +166,9 @@ static const char DASHBOARD_HTML[] =
 "function boardLabel(name,status,seconds,extra){if(status==='checking')return name+': 확인 중';if(status==='online')return name+': 온라인 ('+seconds+'초 전'+(extra?' · '+extra:'')+')';return name+': 오프라인';}\n"
 "async function refreshStats(){try{const res=await fetch('/api/stats/current',{cache:'no-store'});const s=await res.json();if(s.logged_in){document.getElementById('user-session-reps').textContent='렙: '+s.session_reps;document.getElementById('user-session-sets').textContent='세트: '+s.session_sets;document.getElementById('user-total-reps').textContent='누적 렙: '+s.total_reps;document.getElementById('user-total-sets').textContent='누적 세트: '+s.total_sets;document.getElementById('user-goal').textContent='목표 '+s.goal_sets+'세트 '+(s.goal_achieved?'✓ 달성':'진행중');}else{document.getElementById('user-session-reps').textContent='렙: -';document.getElementById('user-session-sets').textContent='세트: -';document.getElementById('user-total-reps').textContent='누적 렙: -';document.getElementById('user-total-sets').textContent='누적 세트: -';document.getElementById('user-goal').textContent='목표: -';}}catch(e){}}\n"
 "async function sendControl(command){const meta=document.getElementById('control-meta');meta.textContent='명령 전송 중...';try{const res=await fetch('/api/control/'+command,{method:'POST'});const data=await res.json();if(!res.ok||!data.ok)throw new Error(data.error||'request_failed');meta.textContent=command==='start'?'운동 시작 명령을 보냈습니다.':'운동 종료 명령을 보냈습니다.';refresh();}catch(err){meta.textContent='명령 전송 실패: '+err.message;}}\n"
-"async function refresh(){try{const res=await fetch('/api/status',{cache:'no-store'});const data=await res.json();const weight=parseFloat(document.getElementById('weight').value)||70;document.getElementById('net-text').textContent=data.mqtt_ready?'MQTT 연결됨':'MQTT 대기 중';document.getElementById('net-dot').style.background=data.mqtt_ready?'#16a34a':'#f59e0b';const info=statusInfo(data);const statusEl=document.getElementById('status-text');statusEl.textContent=info.text;statusEl.className='value status '+info.cls;document.getElementById('status-meta').textContent='세션 시간 '+data.session_active_sec+'초 | 최근 반복 '+data.speed_rep+' | 경고 '+data.warn;document.getElementById('reps').textContent=esc(data.reps);document.getElementById('sets').textContent=esc(data.sets)+' / '+esc(data.target_sets);document.getElementById('speed').textContent=esc(data.speed_ms)+' ms';document.getElementById('warn').textContent='경고: '+esc(data.warn);document.getElementById('rest').textContent='휴식: '+(data.rest_sec>0?(esc(data.rest_sec)+'초 (세트 '+esc(data.rest_after)+' 후)'):'-');document.getElementById('daily').textContent='일일 누적: '+esc(data.daily_reps)+'회 / '+esc(data.daily_sets)+'세트';document.getElementById('mode-chip').textContent='센서 모드: '+(data.tracking?'저장 중':'모니터링');document.getElementById('sensor-board').textContent=boardLabel('센서 보드',data.sensor_status,data.sensor_seen_sec,data.tracking?'저장 중':'모니터링');document.getElementById('display-board').textContent=boardLabel('디스플레이 보드',data.display_status,data.display_seen_sec,'표시 중');document.getElementById('session-kcal').textContent=fmtKcal(calcKcal(weight,data.session_active_sec));document.getElementById('daily-kcal').textContent=fmtKcal(calcKcal(weight,data.daily_active_sec));renderBars(data.speed_history||[]);const uname=data.current_user||'';document.getElementById('current-user-name').textContent=uname||'로그인 전';if(data.pending_uid&&data.pending_uid.length>0&&document.getElementById('reg-form').style.display==='none'){document.getElementById('reg-form').style.display='block';document.getElementById('reg-uid-label').textContent='카드 UID: '+data.pending_uid;document.getElementById('rfid-meta').textContent='등록 정보를 입력하고 등록 버튼을 누르세요.';}}catch(err){document.getElementById('net-text').textContent='대시보드 연결 끊김';document.getElementById('net-dot').style.background='#dc2626';}}\n"
-"window.addEventListener('load',()=>{const weight=document.getElementById('weight');weight.value=loadWeight();weight.addEventListener('input',()=>{saveWeight(weight.value);refresh();});document.getElementById('start-btn').addEventListener('click',()=>sendControl('start'));document.getElementById('stop-btn').addEventListener('click',()=>sendControl('stop'));document.getElementById('scan-btn').addEventListener('click',async()=>{await fetch('/api/rfid/scan-mode',{method:'POST'});document.getElementById('rfid-meta').textContent='카드를 갖다대세요...';});document.getElementById('reg-submit').addEventListener('click',async()=>{const resp=await fetch('/api/status',{cache:'no-store'});const d=await resp.json();const uid=d.pending_uid;const name=document.getElementById('reg-name').value.trim();const weightValue=parseInt(document.getElementById('reg-weight').value,10)||70;const goal=parseInt(document.getElementById('reg-goal').value,10)||3;if(!uid||!name){alert('이름과 UID를 확인하세요');return;}const res=await fetch('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid,name,weight:weightValue,goal_sets:goal})});const result=await res.json();if(result.ok){document.getElementById('reg-form').style.display='none';document.getElementById('reg-name').value='';document.getElementById('reg-weight').value='';document.getElementById('reg-goal').value='';document.getElementById('rfid-meta').textContent=name+' 등록 완료!';refresh();refreshStats();}else{alert('등록 실패: '+result.error);}});refresh();refreshStats();setInterval(refresh,500);setInterval(refreshStats,1000);});\n"
+"function updateRfidUi(data){const form=document.getElementById('reg-form');const uidLabel=document.getElementById('reg-uid-label');const meta=document.getElementById('rfid-meta');const submit=document.getElementById('reg-submit');if(data.pending_uid&&data.pending_uid.length>0){form.style.display='block';uidLabel.textContent='카드 UID: '+data.pending_uid;meta.textContent='등록 정보를 입력하고 등록 버튼을 누르세요.';submit.disabled=false;return;}if(data.scan_mode){form.style.display='block';uidLabel.textContent='카드 UID: 대기 중';meta.textContent=data.sensor_status==='online'?'카드를 리더기에 태그하세요.':'센서 보드 연결을 확인한 뒤 카드를 태그하세요.';submit.disabled=true;return;}if(form.dataset.waiting==='true'){form.style.display='none';uidLabel.textContent='';submit.disabled=true;}form.dataset.waiting='false';}\n"
+"async function refresh(){try{const res=await fetch('/api/status',{cache:'no-store'});const data=await res.json();const weight=parseFloat(document.getElementById('weight').value)||70;document.getElementById('net-text').textContent=data.mqtt_ready?'MQTT 연결됨':'MQTT 대기 중';document.getElementById('net-dot').style.background=data.mqtt_ready?'#16a34a':'#f59e0b';const info=statusInfo(data);const statusEl=document.getElementById('status-text');statusEl.textContent=info.text;statusEl.className='value status '+info.cls;document.getElementById('status-meta').textContent='세션 시간 '+data.session_active_sec+'초 | 최근 반복 '+data.speed_rep+' | 경고 '+data.warn;document.getElementById('reps').textContent=esc(data.reps);document.getElementById('sets').textContent=esc(data.sets)+' / '+esc(data.target_sets);document.getElementById('speed').textContent=esc(data.speed_ms)+' ms';document.getElementById('warn').textContent='경고: '+esc(data.warn);document.getElementById('rest').textContent='휴식: '+(data.rest_sec>0?(esc(data.rest_sec)+'초 (세트 '+esc(data.rest_after)+' 후)'):'-');document.getElementById('daily').textContent='일일 누적: '+esc(data.daily_reps)+'회 / '+esc(data.daily_sets)+'세트';document.getElementById('mode-chip').textContent='센서 모드: '+(data.tracking?'저장 중':'모니터링');document.getElementById('sensor-board').textContent=boardLabel('센서 보드',data.sensor_status,data.sensor_seen_sec,data.tracking?'저장 중':'모니터링');document.getElementById('display-board').textContent=boardLabel('디스플레이 보드',data.display_status,data.display_seen_sec,'표시 중');document.getElementById('session-kcal').textContent=fmtKcal(calcKcal(weight,data.session_active_sec));document.getElementById('daily-kcal').textContent=fmtKcal(calcKcal(weight,data.daily_active_sec));renderBars(data.speed_history||[]);const uname=data.current_user||'';document.getElementById('current-user-name').textContent=uname||'로그인 전';updateRfidUi(data);}catch(err){document.getElementById('net-text').textContent='대시보드 연결 끊김';document.getElementById('net-dot').style.background='#dc2626';}}\n"
+"window.addEventListener('load',()=>{const weight=document.getElementById('weight');const regForm=document.getElementById('reg-form');const regSubmit=document.getElementById('reg-submit');weight.value=loadWeight();regSubmit.disabled=true;regForm.dataset.waiting='false';weight.addEventListener('input',()=>{saveWeight(weight.value);refresh();});document.getElementById('start-btn').addEventListener('click',()=>sendControl('start'));document.getElementById('stop-btn').addEventListener('click',()=>sendControl('stop'));document.getElementById('scan-btn').addEventListener('click',async()=>{regForm.style.display='block';regForm.dataset.waiting='true';document.getElementById('reg-uid-label').textContent='카드 UID: 대기 중';document.getElementById('rfid-meta').textContent='카드를 리더기에 태그하세요...';regSubmit.disabled=true;try{await fetch('/api/rfid/scan-mode',{method:'POST'});refresh();}catch(err){document.getElementById('rfid-meta').textContent='등록 대기 시작 실패: '+err.message;}});document.getElementById('reg-submit').addEventListener('click',async()=>{const resp=await fetch('/api/status',{cache:'no-store'});const d=await resp.json();const uid=d.pending_uid;const name=document.getElementById('reg-name').value.trim();const weightValue=parseInt(document.getElementById('reg-weight').value,10)||70;const goal=parseInt(document.getElementById('reg-goal').value,10)||3;if(!uid||!name){alert('이름과 UID를 확인하세요');return;}const res=await fetch('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid,name,weight:weightValue,goal_sets:goal})});const result=await res.json();if(result.ok){document.getElementById('reg-form').style.display='none';document.getElementById('reg-form').dataset.waiting='false';document.getElementById('reg-name').value='';document.getElementById('reg-weight').value='';document.getElementById('reg-goal').value='';document.getElementById('rfid-meta').textContent=name+' 등록 완료!';document.getElementById('reg-submit').disabled=true;refresh();refreshStats();}else{alert('등록 실패: '+result.error);}});refresh();refreshStats();setInterval(refresh,500);setInterval(refreshStats,1000);});\n"
 "</script>\n"
 "</body>\n"
 "</html>\n";
@@ -163,7 +176,29 @@ static const char DASHBOARD_HTML[] =
 typedef struct http_state {
     char request[HTTP_REQ_BUF_SIZE];
     size_t request_len;
+    char *response;
+    size_t response_len;
+    size_t response_sent;
 } http_state_t;
+
+static int http_content_length(const char *request) {
+    const char *header = strstr(request, "Content-Length:");
+    if (!header) return 0;
+    header += strlen("Content-Length:");
+    while (*header == ' ') header++;
+    return atoi(header);
+}
+
+static bool http_request_complete(const http_state_t *state) {
+    const char *body = strstr(state->request, "\r\n\r\n");
+    if (!body) return false;
+
+    size_t header_len = (size_t)(body - state->request) + 4;
+    int content_length = http_content_length(state->request);
+    if (content_length <= 0) return true;
+
+    return state->request_len >= header_len + (size_t)content_length;
+}
 
 static int json_int(const char *json, const char *key) {
     char search[32];
@@ -261,9 +296,25 @@ static size_t build_speed_history_json(char *out, size_t out_size) {
 }
 
 static err_t mqtt_send_message(const char *topic, const char *payload) {
+    err_t err;
     if (!g_mqtt_ready || !g_mqtt_client) return ERR_CONN;
-    return mqtt_publish(g_mqtt_client, topic, payload,
-                        (uint16_t)strlen(payload), 0, 0, NULL, NULL);
+    cyw43_arch_lwip_begin();
+    err = mqtt_publish(g_mqtt_client, topic, payload,
+                       (uint16_t)strlen(payload), 0, 0, NULL, NULL);
+    cyw43_arch_lwip_end();
+    if (err != ERR_OK) {
+        printf("[MQTT] Publish request failed on %s: %d\n", topic, err);
+    }
+    return err;
+}
+
+static bool mqtt_client_connected(void) {
+    bool connected = false;
+    if (!g_mqtt_client) return false;
+    cyw43_arch_lwip_begin();
+    connected = mqtt_client_is_connected(g_mqtt_client);
+    cyw43_arch_lwip_end();
+    return connected;
 }
 
 static bool publish_control_command(const char *command) {
@@ -301,6 +352,46 @@ static void users_flash_save(void) {
     restore_interrupts(ints);
 
     printf("[FLASH] 사용자 %d명 저장\n", g_user_count);
+}
+
+static void snapshot_current_user_stats(void) {
+    if (g_current_user < 0) return;
+
+    user_stats_t *stats = &g_stats[g_current_user];
+    int session_reps = g_daily_reps - stats->reps_at_login;
+    int session_sets = g_daily_sets - stats->sets_at_login;
+
+    stats->today_reps = session_reps > 0 ? session_reps : 0;
+    stats->today_sets = session_sets > 0 ? session_sets : 0;
+    stats->total_reps += stats->today_reps;
+    stats->total_sets += stats->today_sets;
+}
+
+static void publish_user_switch(int user_index, const char *uid) {
+    char payload[96];
+    snprintf(payload, sizeof(payload),
+             "{\"name\":\"%s\",\"uid\":\"%s\","
+             "\"weight\":%d,\"goal_sets\":%d}",
+             g_users[user_index].name, uid,
+             g_users[user_index].weight_kg, g_users[user_index].goal_sets);
+    mqtt_send_message(TOPIC_RFID_USER, payload);
+}
+
+static void activate_user(int user_index, const char *uid) {
+    if (user_index < 0 || user_index >= g_user_count) return;
+
+    if (g_current_user != user_index) {
+        snapshot_current_user_stats();
+    }
+
+    g_current_user = user_index;
+    g_stats[user_index].reps_at_login = g_daily_reps;
+    g_stats[user_index].sets_at_login = g_daily_sets;
+    g_pending_uid[0] = '\0';
+    g_scan_mode = false;
+
+    publish_user_switch(user_index, uid);
+    printf("[RFID] 사용자 전환: %s\n", g_users[user_index].name);
 }
 
 static void on_publish(void *arg, const char *topic, u32_t tot_len) {
@@ -368,48 +459,46 @@ static void on_data(void *arg, const u8_t *data, u16_t len, u8_t flags) {
         // 사용자 조회
         for (int i = 0; i < g_user_count; i++) {
             if (strcmp(g_users[i].uid, uid) == 0) {
-                // 이전 사용자 통계 스냅샷 저장
-                if (g_current_user >= 0) {
-                    int prev = g_current_user;
-                    g_stats[prev].today_reps  = g_daily_reps - g_stats[prev].reps_at_login;
-                    g_stats[prev].today_sets  = g_daily_sets - g_stats[prev].sets_at_login;
-                    g_stats[prev].total_reps += g_stats[prev].today_reps;
-                    g_stats[prev].total_sets += g_stats[prev].today_sets;
-                }
-                // 새 사용자 전환
-                g_current_user = i;
-                g_stats[i].reps_at_login = g_daily_reps;
-                g_stats[i].sets_at_login = g_daily_sets;
-
-                char payload[96];
-                snprintf(payload, sizeof(payload),
-                         "{\"name\":\"%s\",\"uid\":\"%s\","
-                         "\"weight\":%d,\"goal_sets\":%d}",
-                         g_users[i].name, uid,
-                         g_users[i].weight_kg, g_users[i].goal_sets);
-                mqtt_send_message(TOPIC_RFID_USER, payload);
-                printf("[RFID] 사용자 전환: %s\n", g_users[i].name);
+                activate_user(i, uid);
                 return;
             }
         }
-        printf("[RFID] 미등록 카드: %s\n", uid);
+        memcpy(g_pending_uid, uid, sizeof(g_pending_uid));
+        g_scan_mode = false;
+        printf("[RFID] 미등록 카드: %s (대시보드 등록 가능)\n", uid);
     }
 }
 
+static void subscribe_next_dashboard_topic(mqtt_client_t *client);
+
 static void on_sub(void *arg, err_t result) {
-    (void)arg;
-    if (result != ERR_OK) printf("[MQTT] 구독 실패: %d\n", result);
-    else printf("[MQTT] 구독 성공\n");
+    mqtt_client_t *client = (mqtt_client_t *)arg;
+    size_t topic_index = g_dashboard_subscribe_index == 0 ? 0 : g_dashboard_subscribe_index - 1;
+    const char *topic = g_dashboard_topics[topic_index];
+
+    if (result != ERR_OK) {
+        printf("[MQTT] 구독 실패 (%s): %d\n", topic, result);
+        return;
+    }
+
+    printf("[MQTT] 구독 성공 (%s)\n", topic);
+    subscribe_next_dashboard_topic(client);
 }
 
-static void subscribe_dashboard_topics(mqtt_client_t *client) {
-    mqtt_subscribe(client, TOPIC_COUNT, 0, on_sub, NULL);
-    mqtt_subscribe(client, TOPIC_SPEED, 0, on_sub, NULL);
-    mqtt_subscribe(client, TOPIC_REST, 0, on_sub, NULL);
-    mqtt_subscribe(client, TOPIC_DAILY, 0, on_sub, NULL);
-    mqtt_subscribe(client, TOPIC_SENSOR_STATUS, 0, on_sub, NULL);
-    mqtt_subscribe(client, TOPIC_DISPLAY_STATUS, 0, on_sub, NULL);
-    mqtt_subscribe(client, TOPIC_RFID_UID, 0, on_sub, NULL);
+static void subscribe_next_dashboard_topic(mqtt_client_t *client) {
+    if (g_dashboard_subscribe_index >= DASHBOARD_TOPIC_COUNT) {
+        return;
+    }
+
+    const char *topic = g_dashboard_topics[g_dashboard_subscribe_index];
+    err_t err = mqtt_subscribe(client, topic, 0, on_sub, client);
+    if (err != ERR_OK) {
+        printf("[MQTT] 구독 요청 실패 (%s): %d\n", topic, err);
+        return;
+    }
+
+    printf("[MQTT] 구독 요청 (%s)\n", topic);
+    g_dashboard_subscribe_index++;
 }
 
 static void on_connect(mqtt_client_t *client, void *arg, mqtt_connection_status_t status) {
@@ -425,22 +514,17 @@ static void on_connect(mqtt_client_t *client, void *arg, mqtt_connection_status_
            mqtt_status_name(status), status);
     g_mqtt_ready = true;
     mqtt_set_inpub_callback(client, on_publish, on_data, NULL);
-    subscribe_dashboard_topics(client);
+    g_dashboard_subscribe_index = 0;
+    subscribe_next_dashboard_topic(client);
 }
 
 static void mqtt_connect_broker(void) {
     ip_addr_t broker;
+    err_t err = ERR_OK;
     g_last_mqtt_attempt_ms = now_ms();
     printf("[MQTT] 연결 요청 -> %s:%d\n", MQTT_BROKER_IP, MQTT_BROKER_PORT);
     if (!ip4addr_aton(MQTT_BROKER_IP, &broker)) {
         printf("[MQTT] 잘못된 브로커 IP: %s\n", MQTT_BROKER_IP);
-        return;
-    }
-    if (!g_mqtt_client) {
-        g_mqtt_client = mqtt_client_new();
-    }
-    if (!g_mqtt_client) {
-        printf("[MQTT] 클라이언트 생성 실패\n");
         return;
     }
 
@@ -448,19 +532,39 @@ static void mqtt_connect_broker(void) {
         .client_id = "fitpico_dashboard",
         .keep_alive = 60,
     };
+    if (MQTT_BROKER_USERNAME[0] != '\0') {
+        ci.client_user = MQTT_BROKER_USERNAME;
+    }
+    if (MQTT_BROKER_PASSWORD[0] != '\0') {
+        ci.client_pass = MQTT_BROKER_PASSWORD;
+    }
 
     g_mqtt_connecting = true;
-    err_t err = mqtt_client_connect(g_mqtt_client, &broker, MQTT_BROKER_PORT, on_connect, NULL, &ci);
+    printf("[MQTT] 인증 사용자: %s\n",
+           ci.client_user ? ci.client_user : "(anonymous)");
+    cyw43_arch_lwip_begin();
+    if (!g_mqtt_client) {
+        g_mqtt_client = mqtt_client_new();
+    }
+    if (g_mqtt_client) {
+        err = mqtt_client_connect(g_mqtt_client, &broker, MQTT_BROKER_PORT, on_connect, NULL, &ci);
+    } else {
+        err = ERR_MEM;
+    }
+    cyw43_arch_lwip_end();
     printf("[MQTT] 연결 요청 결과: %d\n", err);
     if (err != ERR_OK) {
         g_mqtt_connecting = false;
+        if (err == ERR_MEM) {
+            printf("[MQTT] 클라이언트 생성 실패\n");
+        }
         printf("[MQTT] 연결 요청 즉시 실패: %d\n", err);
     }
 }
 
 static void maintain_mqtt_connection(uint32_t current_ms) {
     if (!g_wifi_ready) return;
-    if (g_mqtt_ready && g_mqtt_client && !mqtt_client_is_connected(g_mqtt_client)) {
+    if (g_mqtt_ready && !mqtt_client_connected()) {
         printf("[MQTT] 연결 상태 유실, 재연결 예약\n");
         g_mqtt_ready = false;
     }
@@ -542,17 +646,37 @@ static int build_status_json(char *out, size_t out_size) {
     );
 }
 
+static void http_free_state(http_state_t *state) {
+    if (!state) return;
+    free(state->response);
+    free(state);
+}
+
 static err_t http_close(struct tcp_pcb *tpcb, http_state_t *state) {
+    if (!tpcb) {
+        http_free_state(state);
+        return ERR_OK;
+    }
+
+    if (tpcb->unsent != NULL || tpcb->unacked != NULL) {
+        return ERR_MEM;
+    }
+
     tcp_arg(tpcb, NULL);
+    tcp_poll(tpcb, NULL, 0);
     tcp_sent(tpcb, NULL);
     tcp_recv(tpcb, NULL);
     tcp_err(tpcb, NULL);
-    if (state) free(state);
-    return tcp_close(tpcb);
+
+    err_t err = tcp_close(tpcb);
+    if (err == ERR_OK) {
+        http_free_state(state);
+    }
+    return err;
 }
 
-static err_t http_send_response(struct tcp_pcb *tpcb, const char *status_line,
-                                const char *content_type, const char *body) {
+static err_t http_prepare_response(http_state_t *state, const char *status_line,
+                                   const char *content_type, const char *body) {
     char header[256];
     int header_len = snprintf(
         header, sizeof(header),
@@ -564,71 +688,139 @@ static err_t http_send_response(struct tcp_pcb *tpcb, const char *status_line,
         status_line, content_type, (unsigned)strlen(body)
     );
 
-    err_t err = tcp_write(tpcb, header, (u16_t)header_len, TCP_WRITE_FLAG_COPY);
-    if (err != ERR_OK) return err;
-    err = tcp_write(tpcb, body, (u16_t)strlen(body), TCP_WRITE_FLAG_COPY);
-    if (err != ERR_OK) return err;
-    return tcp_output(tpcb);
+    if (header_len <= 0 || header_len >= (int)sizeof(header)) {
+        return ERR_VAL;
+    }
+
+    size_t body_len = strlen(body);
+    size_t total_len = (size_t)header_len + body_len;
+    char *response = (char *)malloc(total_len);
+    if (!response) {
+        return ERR_MEM;
+    }
+
+    memcpy(response, header, (size_t)header_len);
+    memcpy(response + header_len, body, body_len);
+
+    free(state->response);
+    state->response = response;
+    state->response_len = total_len;
+    state->response_sent = 0;
+    return ERR_OK;
 }
 
-static err_t http_send_checked_response(struct tcp_pcb *tpcb, const char *status_line,
-                                        const char *content_type, const char *body) {
-    err_t err = http_send_response(tpcb, status_line, content_type, body);
+static err_t http_flush_response(struct tcp_pcb *tpcb, http_state_t *state) {
+    while (state->response_sent < state->response_len) {
+        u16_t sndbuf = tcp_sndbuf(tpcb);
+        if (sndbuf == 0) break;
+
+        size_t remaining = state->response_len - state->response_sent;
+        u16_t chunk_len = (u16_t)(remaining < sndbuf ? remaining : sndbuf);
+        err_t err = tcp_write(
+            tpcb,
+            state->response + state->response_sent,
+            chunk_len,
+            TCP_WRITE_FLAG_COPY
+        );
+        if (err == ERR_MEM) break;
+        if (err != ERR_OK) return err;
+
+        state->response_sent += chunk_len;
+    }
+
+    err_t err = tcp_output(tpcb);
+    if (err == ERR_MEM) {
+        return ERR_OK;
+    }
+    return err;
+}
+
+static err_t http_send_response(struct tcp_pcb *tpcb, http_state_t *state,
+                                const char *status_line, const char *content_type,
+                                const char *body) {
+    err_t err = http_prepare_response(state, status_line, content_type, body);
+    if (err != ERR_OK) return err;
+    return http_flush_response(tpcb, state);
+}
+
+static err_t http_send_checked_response(struct tcp_pcb *tpcb, http_state_t *state,
+                                        const char *status_line, const char *content_type,
+                                        const char *body) {
+    err_t err = http_send_response(tpcb, state, status_line, content_type, body);
     if (err != ERR_OK) {
         printf("[HTTP] 응답 전송 실패 (%d, %s)\n", err, status_line);
     }
     return err;
 }
 
-static err_t http_send_not_found(struct tcp_pcb *tpcb) {
-    return http_send_checked_response(tpcb, "404 Not Found",
+static err_t http_send_not_found(struct tcp_pcb *tpcb, http_state_t *state) {
+    return http_send_checked_response(tpcb, state, "404 Not Found",
                                       "text/plain; charset=utf-8", "Not Found");
 }
 
-static err_t http_send_control_result(struct tcp_pcb *tpcb, bool ok, const char *message) {
+static err_t http_send_control_result(struct tcp_pcb *tpcb, http_state_t *state,
+                                      bool ok, const char *message) {
     char body[128];
     snprintf(body, sizeof(body),
              "{\"ok\":%s,\"error\":\"%s\"}",
              ok ? "true" : "false", message);
     return http_send_checked_response(
         tpcb,
+        state,
         ok ? "200 OK" : "503 Service Unavailable",
         "application/json; charset=utf-8",
         body
     );
 }
 
-static err_t http_send_status(struct tcp_pcb *tpcb) {
+static err_t http_send_status(struct tcp_pcb *tpcb, http_state_t *state) {
     char json[768];
     build_status_json(json, sizeof(json));
     return http_send_checked_response(
-        tpcb, "200 OK", "application/json; charset=utf-8", json
+        tpcb, state, "200 OK", "application/json; charset=utf-8", json
     );
 }
 
-static err_t http_send_dashboard(struct tcp_pcb *tpcb) {
+static err_t http_send_dashboard(struct tcp_pcb *tpcb, http_state_t *state) {
     return http_send_checked_response(
-        tpcb, "200 OK", "text/html; charset=utf-8", DASHBOARD_HTML
+        tpcb, state, "200 OK", "text/html; charset=utf-8", DASHBOARD_HTML
     );
 }
 
 static err_t http_finish_response(struct tcp_pcb *tpcb, http_state_t *state, err_t response_err) {
-    if (response_err == ERR_OK) {
-        return http_close(tpcb, state);
+    if (response_err != ERR_OK) {
+        tcp_arg(tpcb, NULL);
+        tcp_poll(tpcb, NULL, 0);
+        tcp_sent(tpcb, NULL);
+        tcp_recv(tpcb, NULL);
+        tcp_err(tpcb, NULL);
+        http_free_state(state);
+        tcp_abort(tpcb);
+        return ERR_ABRT;
     }
 
-    tcp_arg(tpcb, NULL);
-    tcp_sent(tpcb, NULL);
-    tcp_recv(tpcb, NULL);
-    tcp_err(tpcb, NULL);
-    if (state) free(state);
-    tcp_abort(tpcb);
-    return ERR_ABRT;
+    if (state->response_sent >= state->response_len) {
+        err_t close_err = http_close(tpcb, state);
+        if (close_err == ERR_OK || close_err == ERR_MEM) {
+            return ERR_OK;
+        }
+        printf("[HTTP] 연결 종료 실패 (%d)\n", close_err);
+        tcp_arg(tpcb, NULL);
+        tcp_poll(tpcb, NULL, 0);
+        tcp_sent(tpcb, NULL);
+        tcp_recv(tpcb, NULL);
+        tcp_err(tpcb, NULL);
+        http_free_state(state);
+        tcp_abort(tpcb);
+        return ERR_ABRT;
+    }
+
+    return ERR_OK;
 }
 
 // ─── 사용자 관리 API 핸들러 ──────────────────────────────────────────────────
 
-static err_t handle_get_users(struct tcp_pcb *tpcb) {
+static err_t handle_get_users(struct tcp_pcb *tpcb, http_state_t *state) {
     char body[1024];
     size_t pos = 0;
     pos += (size_t)snprintf(body + pos, sizeof(body) - pos, "[");
@@ -644,19 +836,19 @@ static err_t handle_get_users(struct tcp_pcb *tpcb) {
     }
     snprintf(body + pos, sizeof(body) - pos, "]");
     return http_send_checked_response(
-        tpcb, "200 OK", "application/json; charset=utf-8", body
+        tpcb, state, "200 OK", "application/json; charset=utf-8", body
     );
 }
 
-static err_t handle_post_user(struct tcp_pcb *tpcb, const char *request) {
+static err_t handle_post_user(struct tcp_pcb *tpcb, http_state_t *state, const char *request) {
     const char *body = strstr(request, "\r\n\r\n");
     if (!body) {
-        return http_send_not_found(tpcb);
+        return http_send_not_found(tpcb, state);
     }
     body += 4;
 
     if (g_user_count >= MAX_USERS) {
-        return http_send_control_result(tpcb, false, "max_users_reached");
+        return http_send_control_result(tpcb, state, false, "max_users_reached");
     }
 
     user_t u = {0};
@@ -666,23 +858,24 @@ static err_t handle_post_user(struct tcp_pcb *tpcb, const char *request) {
     u.goal_sets = (uint8_t)json_int(body, "goal_sets");
 
     if (u.uid[0] == '\0' || u.name[0] == '\0') {
-        return http_send_control_result(tpcb, false, "missing_fields");
+        return http_send_control_result(tpcb, state, false, "missing_fields");
     }
 
     for (int i = 0; i < g_user_count; i++) {
         if (strcmp(g_users[i].uid, u.uid) == 0) {
-            return http_send_control_result(tpcb, false, "uid_exists");
+            return http_send_control_result(tpcb, state, false, "uid_exists");
         }
     }
 
+    int new_user_index = g_user_count;
     g_users[g_user_count++] = u;
     users_flash_save();
-    g_pending_uid[0] = '\0';
+    activate_user(new_user_index, u.uid);
     printf("[USER] 등록: %s (%s)\n", u.name, u.uid);
-    return http_send_control_result(tpcb, true, "");
+    return http_send_control_result(tpcb, state, true, "");
 }
 
-static err_t handle_get_current_user(struct tcp_pcb *tpcb) {
+static err_t handle_get_current_user(struct tcp_pcb *tpcb, http_state_t *state) {
     char body[128];
     if (g_current_user < 0) {
         snprintf(body, sizeof(body), "{\"logged_in\":false}");
@@ -694,18 +887,18 @@ static err_t handle_get_current_user(struct tcp_pcb *tpcb) {
                  u->name, u->weight_kg, u->goal_sets);
     }
     return http_send_checked_response(
-        tpcb, "200 OK", "application/json; charset=utf-8", body
+        tpcb, state, "200 OK", "application/json; charset=utf-8", body
     );
 }
 
-static err_t handle_scan_mode(struct tcp_pcb *tpcb) {
+static err_t handle_scan_mode(struct tcp_pcb *tpcb, http_state_t *state) {
     g_scan_mode = true;
     g_pending_uid[0] = '\0';
     printf("[RFID] 등록 대기 모드 진입\n");
-    return http_send_control_result(tpcb, true, "");
+    return http_send_control_result(tpcb, state, true, "");
 }
 
-static err_t handle_get_current_stats(struct tcp_pcb *tpcb) {
+static err_t handle_get_current_stats(struct tcp_pcb *tpcb, http_state_t *state) {
     char body[256];
     if (g_current_user < 0) {
         snprintf(body, sizeof(body), "{\"logged_in\":false}");
@@ -730,8 +923,21 @@ static err_t handle_get_current_stats(struct tcp_pcb *tpcb) {
                  g_pending_uid);
     }
     return http_send_checked_response(
-        tpcb, "200 OK", "application/json; charset=utf-8", body
+        tpcb, state, "200 OK", "application/json; charset=utf-8", body
     );
+}
+
+static err_t http_sent(void *arg, struct tcp_pcb *tpcb, u16_t len) {
+    (void)len;
+    http_state_t *state = (http_state_t *)arg;
+    if (!state) return ERR_OK;
+    return http_finish_response(tpcb, state, http_flush_response(tpcb, state));
+}
+
+static err_t http_poll(void *arg, struct tcp_pcb *tpcb) {
+    http_state_t *state = (http_state_t *)arg;
+    if (!state) return ERR_OK;
+    return http_finish_response(tpcb, state, http_flush_response(tpcb, state));
 }
 
 static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
@@ -751,36 +957,36 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
     state->request[state->request_len] = '\0';
     pbuf_free(p);
 
-    if (strstr(state->request, "\r\n\r\n") == NULL) {
+    if (!http_request_complete(state)) {
         return ERR_OK;
     }
 
     err_t response_err = ERR_OK;
 
     if (strncmp(state->request, "GET /api/status ", 16) == 0) {
-        response_err = http_send_status(tpcb);
+        response_err = http_send_status(tpcb, state);
     } else if (strncmp(state->request, "POST /api/control/start ", 24) == 0) {
-        response_err = http_send_control_result(tpcb, publish_control_command("start"),
+        response_err = http_send_control_result(tpcb, state, publish_control_command("start"),
                                                 g_mqtt_ready ? "" : "mqtt_not_ready");
     } else if (strncmp(state->request, "POST /api/control/stop ", 23) == 0) {
-        response_err = http_send_control_result(tpcb, publish_control_command("stop"),
+        response_err = http_send_control_result(tpcb, state, publish_control_command("stop"),
                                                 g_mqtt_ready ? "" : "mqtt_not_ready");
     } else if (strncmp(state->request, "GET /api/users/current ", 23) == 0) {
-        response_err = handle_get_current_user(tpcb);
+        response_err = handle_get_current_user(tpcb, state);
     } else if (strncmp(state->request, "GET /api/users ", 15) == 0) {
-        response_err = handle_get_users(tpcb);
+        response_err = handle_get_users(tpcb, state);
     } else if (strncmp(state->request, "POST /api/users ", 16) == 0) {
-        response_err = handle_post_user(tpcb, state->request);
+        response_err = handle_post_user(tpcb, state, state->request);
     } else if (strncmp(state->request, "POST /api/rfid/scan-mode ", 25) == 0) {
-        response_err = handle_scan_mode(tpcb);
+        response_err = handle_scan_mode(tpcb, state);
     } else if (strncmp(state->request, "GET /api/stats/current ", 23) == 0) {
-        response_err = handle_get_current_stats(tpcb);
+        response_err = handle_get_current_stats(tpcb, state);
     } else if (strncmp(state->request, "GET / ", 6) == 0 ||
                strncmp(state->request, "GET /HTTP", 9) == 0 ||
                strncmp(state->request, "GET /index.html ", 16) == 0) {
-        response_err = http_send_dashboard(tpcb);
+        response_err = http_send_dashboard(tpcb, state);
     } else {
-        response_err = http_send_not_found(tpcb);
+        response_err = http_send_not_found(tpcb, state);
     }
 
     return http_finish_response(tpcb, state, response_err);
@@ -789,7 +995,7 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
 static void http_err(void *arg, err_t err) {
     (void)err;
     http_state_t *state = (http_state_t *)arg;
-    if (state) free(state);
+    http_free_state(state);
 }
 
 static err_t http_accept(void *arg, struct tcp_pcb *newpcb, err_t err) {
@@ -803,6 +1009,8 @@ static err_t http_accept(void *arg, struct tcp_pcb *newpcb, err_t err) {
     }
 
     tcp_arg(newpcb, state);
+    tcp_poll(newpcb, http_poll, 2);
+    tcp_sent(newpcb, http_sent);
     tcp_recv(newpcb, http_recv);
     tcp_err(newpcb, http_err);
     return ERR_OK;

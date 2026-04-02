@@ -146,6 +146,7 @@ static int  g_daily_reps  = 0;
 static int  g_daily_sets  = 0;
 static char g_current_user_name[20] = {0};
 static uint32_t g_user_display_until_ms = 0;
+static int g_pending_beeps = 0;
 
 static bool g_dirty = true;
 static bool g_wifi_ready = false;
@@ -244,8 +245,22 @@ static session_snapshot_t current_session_snapshot(void) {
 
 static void mqtt_send(const char *topic, const char *payload) {
     if (!g_mqtt_ready || !g_mqtt_client) return;
-    mqtt_publish(g_mqtt_client, topic, payload,
-                 (uint16_t)strlen(payload), 0, 0, NULL, NULL);
+    cyw43_arch_lwip_begin();
+    err_t err = mqtt_publish(g_mqtt_client, topic, payload,
+                             (uint16_t)strlen(payload), 0, 0, NULL, NULL);
+    cyw43_arch_lwip_end();
+    if (err != ERR_OK) {
+        printf("[MQTT] Publish request failed on %s: %d\n", topic, err);
+    }
+}
+
+static bool mqtt_client_connected(void) {
+    bool connected = false;
+    if (!g_mqtt_client) return false;
+    cyw43_arch_lwip_begin();
+    connected = mqtt_client_is_connected(g_mqtt_client);
+    cyw43_arch_lwip_end();
+    return connected;
 }
 
 static void buzzer_tone(uint32_t frequency_hz, uint32_t duration_ms) {
@@ -267,6 +282,20 @@ static void buzzer_beep(int count) {
         buzzer_tone(BUZZER_TONE_HZ, BUZZER_BEEP_MS);
         sleep_ms(BUZZER_GAP_MS);
     }
+}
+
+static void queue_beeps(int count) {
+    if (count <= 0) return;
+    g_pending_beeps += count;
+    if (g_pending_beeps > 12) {
+        g_pending_beeps = 12;
+    }
+}
+
+static void process_buzzer_queue(void) {
+    if (g_pending_beeps <= 0) return;
+    buzzer_beep(1);
+    g_pending_beeps--;
 }
 
 static bool connect_wifi_with_fallbacks(void) {
@@ -337,27 +366,27 @@ static bool json_bool(const char *json, const char *key, bool default_value) {
 static void handle_session_output(session_snapshot_t previous,
                                   session_snapshot_t current) {
     if (!previous.active && current.active) {
-        buzzer_beep(1);
+        queue_beeps(1);
         return;
     }
 
     if (previous.active && !current.active &&
         current.reps == 0 && current.sets == 0 && !current.tracking) {
-        buzzer_beep(2);
+        queue_beeps(2);
         return;
     }
 
     if (current.sets > previous.sets && !current.active && current.reps == 0) {
-        buzzer_beep(3);
+        queue_beeps(3);
         if (current.sets >= TARGET_SETS) {
-            buzzer_beep(5);
+            queue_beeps(5);
         }
     }
 }
 
 static void handle_speed_output(int previous_speed_rep, int current_speed_rep) {
     if (current_speed_rep <= 0 || current_speed_rep == previous_speed_rep) return;
-    buzzer_beep(1);
+    queue_beeps(1);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -458,35 +487,49 @@ static void on_connect(mqtt_client_t *client, void *arg,
 
 static void mqtt_connect_broker(void) {
     ip_addr_t broker;
+    err_t err = ERR_OK;
     g_last_mqtt_attempt_ms = now_ms();
     printf("[MQTT] Connect request -> %s:%d\n", MQTT_BROKER_IP, MQTT_BROKER_PORT);
     if (!ip4addr_aton(MQTT_BROKER_IP, &broker)) {
         printf("[MQTT] Invalid broker IP: %s\n", MQTT_BROKER_IP);
         return;
     }
-    if (!g_mqtt_client) {
-        g_mqtt_client = mqtt_client_new();
-    }
-    if (!g_mqtt_client) {
-        printf("[MQTT] Client allocation failed\n");
-        return;
-    }
     struct mqtt_connect_client_info_t ci = {
         .client_id = "fitpico_display", .keep_alive = 60,
     };
+    if (MQTT_BROKER_USERNAME[0] != '\0') {
+        ci.client_user = MQTT_BROKER_USERNAME;
+    }
+    if (MQTT_BROKER_PASSWORD[0] != '\0') {
+        ci.client_pass = MQTT_BROKER_PASSWORD;
+    }
     g_mqtt_connecting = true;
-    err_t err = mqtt_client_connect(g_mqtt_client, &broker, MQTT_BROKER_PORT,
-                                    on_connect, NULL, &ci);
+    printf("[MQTT] Auth user: %s\n",
+           ci.client_user ? ci.client_user : "(anonymous)");
+    cyw43_arch_lwip_begin();
+    if (!g_mqtt_client) {
+        g_mqtt_client = mqtt_client_new();
+    }
+    if (g_mqtt_client) {
+        err = mqtt_client_connect(g_mqtt_client, &broker, MQTT_BROKER_PORT,
+                                  on_connect, NULL, &ci);
+    } else {
+        err = ERR_MEM;
+    }
+    cyw43_arch_lwip_end();
     printf("[MQTT] Connect request result: %d\n", err);
     if (err != ERR_OK) {
         g_mqtt_connecting = false;
+        if (err == ERR_MEM) {
+            printf("[MQTT] Client allocation failed\n");
+        }
         printf("[MQTT] Connect request failed immediately: %d\n", err);
     }
 }
 
 static void maintain_mqtt_connection(uint32_t current_ms) {
     if (!g_wifi_ready) return;
-    if (g_mqtt_ready && g_mqtt_client && !mqtt_client_is_connected(g_mqtt_client)) {
+    if (g_mqtt_ready && !mqtt_client_connected()) {
         printf("[MQTT] Client lost connection, scheduling reconnect\n");
         g_mqtt_ready = false;
     }
@@ -546,6 +589,7 @@ int main(void) {
         cyw43_arch_poll();
         uint32_t now = now_ms();
         maintain_mqtt_connection(now);
+        process_buzzer_queue();
         if (g_dirty) display_update();
         if (g_mqtt_ready && (now - last_heartbeat_ms > DEVICE_HEARTBEAT_INTERVAL_MS)) {
             publish_display_heartbeat();

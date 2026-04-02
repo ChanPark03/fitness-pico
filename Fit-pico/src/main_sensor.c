@@ -33,6 +33,7 @@
 #define MFRC_ModeReg       0x11
 #define MFRC_TxControlReg  0x14
 #define MFRC_TxASKReg      0x15
+#define MFRC_VersionReg    0x37
 #define MFRC_TModeReg      0x2A
 #define MFRC_TPrescalerReg 0x2B
 #define MFRC_TReloadRegH   0x2C
@@ -161,10 +162,28 @@ static void mqtt_pub_cb(void *arg, err_t result) {
     if (result != ERR_OK) printf("[MQTT] Publish error: %d\n", result);
 }
 
-static void mqtt_send(const char *topic, const char *payload) {
-    if (!g_mqtt_ready || !g_mqtt_client) return;
-    mqtt_publish(g_mqtt_client, topic, payload,
-                 (uint16_t)strlen(payload), 0, 0, mqtt_pub_cb, NULL);
+static bool mqtt_client_connected(void) {
+    bool connected = false;
+    if (!g_mqtt_client) return false;
+    cyw43_arch_lwip_begin();
+    connected = mqtt_client_is_connected(g_mqtt_client);
+    cyw43_arch_lwip_end();
+    return connected;
+}
+
+static err_t mqtt_send(const char *topic, const char *payload) {
+    if (!g_mqtt_ready || !g_mqtt_client) {
+        printf("[MQTT] Skip publish on %s: client not ready\n", topic);
+        return ERR_CONN;
+    }
+    cyw43_arch_lwip_begin();
+    err_t err = mqtt_publish(g_mqtt_client, topic, payload,
+                             (uint16_t)strlen(payload), 0, 0, mqtt_pub_cb, NULL);
+    cyw43_arch_lwip_end();
+    if (err != ERR_OK) {
+        printf("[MQTT] Publish request failed on %s: %d\n", topic, err);
+    }
+    return err;
 }
 
 static void publish_rest_state(int rest_sec) {
@@ -320,6 +339,7 @@ static void mfrc_set_bits(uint8_t reg, uint8_t mask) {
 
 static void mfrc_init(void) {
     spi_init(spi0, 1000 * 1000);
+    spi_set_format(spi0, 8, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
     gpio_set_function(RFID_MISO_PIN, GPIO_FUNC_SPI);
     gpio_set_function(RFID_SCK_PIN,  GPIO_FUNC_SPI);
     gpio_set_function(RFID_MOSI_PIN, GPIO_FUNC_SPI);
@@ -344,7 +364,11 @@ static void mfrc_init(void) {
     mfrc_write(MFRC_ModeReg,       0x3D);
     mfrc_set_bits(MFRC_TxControlReg, 0x03);   // 안테나 ON
 
-    printf("[RFID] MFRC522 초기화 완료\n");
+    uint8_t version = mfrc_read(MFRC_VersionReg);
+    printf("[RFID] MFRC522 초기화 완료 (version=0x%02X)\n", version);
+    if (version == 0x00 || version == 0xFF) {
+        printf("[RFID] 경고: SPI 배선 또는 전원 확인 필요\n");
+    }
 }
 
 // 카드 감지 (REQA). 카드 있으면 true.
@@ -405,7 +429,18 @@ static void handle_rfid_scan(uint32_t current_ms) {
     if (!mfrc_detect_card()) return;
 
     uint8_t uid[4];
-    if (!mfrc_read_uid(uid)) return;
+    bool uid_ok = false;
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) sleep_ms(10);
+        if (mfrc_read_uid(uid)) {
+            uid_ok = true;
+            break;
+        }
+    }
+    if (!uid_ok) {
+        printf("[RFID] 카드 감지는 되었지만 UID 읽기 실패\n");
+        return;
+    }
 
     char uid_str[12] = {0};
     rfid_uid_to_str(uid, uid_str);
@@ -421,7 +456,11 @@ static void handle_rfid_scan(uint32_t current_ms) {
 
     char payload[32];
     snprintf(payload, sizeof(payload), "{\"uid\":\"%s\"}", uid_str);
-    mqtt_send(TOPIC_RFID_UID, payload);
+    err_t err = mqtt_send(TOPIC_RFID_UID, payload);
+    if (err == ERR_CONN) {
+        printf("[RFID] UID 읽음, 하지만 MQTT 미연결로 태그 전송 보류: %s\n", uid_str);
+    }
+    printf("[RFID] UID publish result on %s: %d\n", TOPIC_RFID_UID, err);
     printf("[RFID] 카드 감지: %s\n", uid_str);
 }
 
@@ -560,41 +599,53 @@ static bool connect_wifi_with_fallbacks(void) {
 
 static void mqtt_connect_broker(void) {
     ip_addr_t broker;
+    err_t err = ERR_OK;
     g_last_mqtt_attempt_ms = now_ms();
     printf("[MQTT] Connect request -> %s:%d\n", MQTT_BROKER_IP, MQTT_BROKER_PORT);
     if (!ip4addr_aton(MQTT_BROKER_IP, &broker)) {
         printf("[MQTT] Invalid broker IP: %s\n", MQTT_BROKER_IP);
         return;
     }
-    if (!g_mqtt_client) {
-        g_mqtt_client = mqtt_client_new();
-    }
-    if (!g_mqtt_client) {
-        printf("[MQTT] Client allocation failed\n");
-        return;
-    }
 
     struct mqtt_connect_client_info_t ci = {
         .client_id   = "fitpico_sensor",
-        .client_user = NULL,
-        .client_pass = NULL,
         .keep_alive  = 60,
         .will_topic  = NULL,
     };
+    if (MQTT_BROKER_USERNAME[0] != '\0') {
+        ci.client_user = MQTT_BROKER_USERNAME;
+    }
+    if (MQTT_BROKER_PASSWORD[0] != '\0') {
+        ci.client_pass = MQTT_BROKER_PASSWORD;
+    }
 
     g_mqtt_connecting = true;
-    err_t err = mqtt_client_connect(g_mqtt_client, &broker, MQTT_BROKER_PORT,
-                                    mqtt_connection_cb, NULL, &ci);
+    printf("[MQTT] Auth user: %s\n",
+           ci.client_user ? ci.client_user : "(anonymous)");
+    cyw43_arch_lwip_begin();
+    if (!g_mqtt_client) {
+        g_mqtt_client = mqtt_client_new();
+    }
+    if (g_mqtt_client) {
+        err = mqtt_client_connect(g_mqtt_client, &broker, MQTT_BROKER_PORT,
+                                  mqtt_connection_cb, NULL, &ci);
+    } else {
+        err = ERR_MEM;
+    }
+    cyw43_arch_lwip_end();
     printf("[MQTT] Connect request result: %d\n", err);
     if (err != ERR_OK) {
         g_mqtt_connecting = false;
+        if (err == ERR_MEM) {
+            printf("[MQTT] Client allocation failed\n");
+        }
         printf("[MQTT] Connect request failed immediately: %d\n", err);
     }
 }
 
 static void maintain_mqtt_connection(uint32_t current_ms) {
     if (!g_wifi_ready) return;
-    if (g_mqtt_ready && g_mqtt_client && !mqtt_client_is_connected(g_mqtt_client)) {
+    if (g_mqtt_ready && !mqtt_client_connected()) {
         printf("[MQTT] Client lost connection, scheduling reconnect\n");
         g_mqtt_ready = false;
     }
