@@ -25,9 +25,10 @@
       .body { font: 500 18px 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; fill: #24393f; }
       .small { font: 500 15px 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; fill: #54666c; }
       .chip-text { font: 700 14px 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; fill: #21363c; }
-      .label { font: 700 16px 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; fill: #2a434a; }
+      .label { font: 700 16px 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; fill: #2a434a; paint-order: stroke; stroke: #f6f7f4; stroke-width: 10px; stroke-linejoin: round; }
+      .flow-note { font: 600 15px 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; fill: #54666c; paint-order: stroke; stroke: #f6f7f4; stroke-width: 8px; stroke-linejoin: round; }
       .step-num { font: 700 18px 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; fill: #ffffff; }
-      .step-text { font: 600 17px 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; fill: #21363c; }
+      .step-detail { font: 600 15px 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; fill: #21363c; }
     </style>
   </defs>
 
@@ -83,37 +84,49 @@
   <text x="1168" y="714" class="body">• 현재 사용자 이름 표시</text>
 
   <path class="line" d="M440 300C485 286 505 268 540 248"/>
-  <text x="430" y="256" class="label">운동 상태 + RFID UID 발행</text>
+  <text x="392" y="228" class="label">운동 상태 + RFID UID 발행</text>
 
   <path class="line" d="M800 340V440"/>
-  <text x="824" y="398" class="label">sensor/status 수신</text>
+  <text x="832" y="396" class="label">sensor/status 수신</text>
 
   <path class="line" d="M1060 240H1140"/>
-  <text x="1078" y="220" class="label">mDNS / HTTP</text>
+  <text x="1074" y="212" class="label">mDNS / HTTP</text>
 
   <path class="line" d="M1260 370C1220 420 1140 474 1060 540"/>
-  <text x="1160" y="430" class="label">HTTP 요청</text>
+  <text x="1176" y="408" class="label">HTTP 요청</text>
 
   <path class="line" d="M1060 610H1140"/>
-  <text x="1084" y="590" class="label">JSON 응답</text>
+  <text x="1086" y="586" class="label">JSON 응답</text>
 
   <path class="line" d="M1060 660H1140"/>
-  <text x="1076" y="640" class="label">rfid/user + 표시 데이터</text>
+  <text x="1068" y="636" class="label">rfid/user + 표시 데이터</text>
 
   <path class="line dash" d="M440 430C500 470 518 510 540 556"/>
-  <text x="402" y="494" class="small">운동 중 주기적 업데이트</text>
+  <text x="386" y="526" class="flow-note">운동 중 주기적 업데이트</text>
 
-  <rect class="panel" x="80" y="840" rx="24" ry="24" width="1440" height="94"/>
-  <circle cx="140" cy="887" r="22" fill="#0f766e"/>
-  <text x="133" y="894" class="step-num">1</text>
-  <text x="176" y="894" class="step-text">센서 보드가 운동과 RFID UID를 읽어 MQTT로 발행</text>
-  <circle cx="500" cy="887" r="22" fill="#5a92e4"/>
-  <text x="493" y="894" class="step-num">2</text>
-  <text x="536" y="894" class="step-text">대시보드가 UID를 받아 등록 대기 또는 사용자 전환 처리</text>
-  <circle cx="943" cy="887" r="22" fill="#9a7ae0"/>
-  <text x="936" y="894" class="step-num">3</text>
-  <text x="979" y="894" class="step-text">브라우저가 등록 요청과 운동 제어를 보냄</text>
-  <circle cx="1298" cy="887" r="22" fill="#dd7f6f"/>
-  <text x="1291" y="894" class="step-num">4</text>
-  <text x="1334" y="894" class="step-text">디스플레이 보드가 현재 상태와 사용자 이름 표시</text>
+  <rect class="panel" x="80" y="818" rx="24" ry="24" width="1440" height="126"/>
+  <circle cx="132" cy="880" r="22" fill="#0f766e"/>
+  <text x="125" y="887" class="step-num">1</text>
+  <text x="168" y="872" class="step-detail">
+    <tspan x="168" y="872">센서 보드가 운동과 RFID UID를</tspan>
+    <tspan x="168" dy="22">읽어 MQTT로 발행</tspan>
+  </text>
+  <circle cx="492" cy="880" r="22" fill="#5a92e4"/>
+  <text x="485" y="887" class="step-num">2</text>
+  <text x="528" y="872" class="step-detail">
+    <tspan x="528" y="872">대시보드가 UID를 받아</tspan>
+    <tspan x="528" dy="22">등록 대기 또는 사용자 전환 처리</tspan>
+  </text>
+  <circle cx="852" cy="880" r="22" fill="#9a7ae0"/>
+  <text x="845" y="887" class="step-num">3</text>
+  <text x="888" y="872" class="step-detail">
+    <tspan x="888" y="872">브라우저가 등록 요청과</tspan>
+    <tspan x="888" dy="22">운동 제어를 보냄</tspan>
+  </text>
+  <circle cx="1212" cy="880" r="22" fill="#dd7f6f"/>
+  <text x="1205" y="887" class="step-num">4</text>
+  <text x="1248" y="872" class="step-detail">
+    <tspan x="1248" y="872">디스플레이 보드가</tspan>
+    <tspan x="1248" dy="22">현재 상태와 사용자 이름 표시</tspan>
+  </text>
 </svg>
