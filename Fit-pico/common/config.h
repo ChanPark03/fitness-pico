@@ -24,21 +24,31 @@
 #define TOPIC_SENSOR_STATUS  "fitpico/sensor/status"
 #define TOPIC_DISPLAY_STATUS "fitpico/display/status"
 
+// RFID 토픽
+#define TOPIC_RFID_UID   "fitpico/rfid/uid"    // Sensor → Dashboard: UID 감지
+#define TOPIC_RFID_USER  "fitpico/rfid/user"   // Dashboard → 전체: 사용자 전환
+
 // ─── 핀 정의 (팀원 A — 센서 노드) ──────────────────────────────────────────
 #define HCSR04_TRIG_PIN   14
 #define HCSR04_ECHO_PIN   15
-#define PIR_PIN           16
 
 // ─── 디스플레이 보드 출력 장치 ─────────────────────────────────────────────
 #define BUZZER_PIN            18    // 디스플레이 보드 버저 핀
+
+// ─── RFID (MFRC522 — 센서 노드 SPI0) ───────────────────────────────────────
+#define RFID_MISO_PIN     4   // SPI0 RX
+#define RFID_SCK_PIN      2   // SPI0 SCK
+#define RFID_MOSI_PIN     3   // SPI0 TX
+#define RFID_CS_PIN       5   // Chip Select (software)
+#define RFID_RST_PIN      0   // Reset
+
+#define RFID_SCAN_COOLDOWN_MS  2000  // 같은 카드 재인식 방지 (ms)
 
 // ─── 운동 파라미터 ───────────────────────────────────────────────────────────
 #define PUSHUP_DOWN_CM        12.0f  // 내려간 기준 (cm)
 #define PUSHUP_UP_CM          28.0f  // 올라온 기준 (cm)
 #define REPS_PER_SET          10     // 한 세트 반복 횟수
 #define TARGET_SETS           3      // 목표 세트 수
-
-#define PIR_TIMEOUT_MS        30000  // PIR 무동작 자동 정지 타임아웃 (ms)
 
 // ─── 운동 속도 기준 ──────────────────────────────────────────────────────────
 #define REP_TOO_FAST_MS       800    // 이보다 빠르면 너무 빠름 경고 (ms)

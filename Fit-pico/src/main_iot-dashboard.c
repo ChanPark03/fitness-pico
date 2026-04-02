@@ -13,9 +13,42 @@
 #include "lwip/tcp.h"
 #include "lwip/apps/mdns.h"
 
+#include "hardware/flash.h"
+#include "hardware/sync.h"
+
 #include "config.h"
 
 #define HTTP_PORT 80
+#define MAX_USERS           8
+#define FLASH_MAGIC         0xFD5A1234U
+#define FLASH_USER_SIZE     512    // 2 flash pages (각 256 bytes)
+#define FLASH_USER_OFFSET   (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)
+
+typedef struct __attribute__((packed)) {
+    char    uid[12];      // "A3:B2:C1:D0\0"
+    char    name[20];
+    uint8_t weight_kg;
+    uint8_t goal_sets;
+    uint8_t _pad[2];
+} user_t;   // 36 bytes
+
+typedef struct {
+    uint32_t magic;
+    uint8_t  count;
+    uint8_t  _pad[3];
+    user_t   users[MAX_USERS];      // 8 * 36 = 288 bytes
+    uint8_t  _fill[512 - 8 - 288];  // = 216 bytes, 총 512
+} flash_user_block_t;
+
+typedef struct {
+    int      today_reps;
+    int      today_sets;
+    int      total_reps;
+    int      total_sets;
+    int      reps_at_login;   // 로그인 시점 g_daily_reps 스냅샷
+    int      sets_at_login;
+} user_stats_t;
+
 #define HTTP_REQ_BUF_SIZE 768
 #define DASHBOARD_HOSTNAME "fitpico-dashboard"
 #define SPEED_HISTORY 5
@@ -57,6 +90,13 @@ static int g_hist_count = 0;
 
 static struct tcp_pcb *g_http_pcb = NULL;
 
+static user_t       g_users[MAX_USERS]      = {0};
+static user_stats_t g_stats[MAX_USERS]      = {0};
+static int          g_user_count            = 0;
+static int          g_current_user          = -1;   // -1 = 미로그인
+static bool         g_scan_mode             = false;
+static char         g_pending_uid[12]       = {0};
+
 static const char DASHBOARD_HTML[] =
 "<!doctype html>\n"
 "<html lang=\"ko\">\n"
@@ -78,6 +118,7 @@ static const char DASHBOARD_HTML[] =
 ".history{display:flex;gap:10px;align-items:flex-end;height:140px;margin-top:18px}.bar{flex:1;min-width:24px;background:linear-gradient(180deg,#14b8a6,#0f766e);border-radius:12px 12px 4px 4px;position:relative}\n"
 ".bar span{position:absolute;bottom:-26px;left:50%;transform:translateX(-50%);font-size:12px;color:var(--muted)}\n"
 ".controls{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:12px}.btn{border:0;border-radius:999px;padding:12px 18px;font-weight:800;cursor:pointer;background:#0f766e;color:#fff}.btn.stop{background:#b91c1c}.btn:disabled{opacity:.5;cursor:not-allowed}.weight-wrap{display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid var(--line);border-radius:999px;background:#f8f3e8;font-weight:700}.weight-wrap input{width:88px;border:0;background:transparent;font:inherit;outline:none}\n"
+".rfid-form input{padding:10px 12px;border-radius:12px;border:1px solid var(--line);font-size:16px;background:#fffdf8}.rfid-form input[type=number]{width:110px}.rfid-panel{margin-top:16px;background:#f3efe6}\n"
 ".footer{margin-top:18px;color:var(--muted);font-size:14px}@media (max-width:820px){.kpi,.wide{grid-column:span 12}.hero{flex-direction:column}}\n"
 "</style>\n"
 "</head>\n"
@@ -98,6 +139,7 @@ static const char DASHBOARD_HTML[] =
 "<section class=\"card wide\"><div class=\"label\">보드 연결 상태</div><div class=\"list\"><div class=\"chip\" id=\"sensor-board\">센서 보드: 확인 중</div><div class=\"chip\" id=\"display-board\">디스플레이 보드: 확인 중</div></div></section>\n"
 "<section class=\"card full\"><div class=\"label\">경고 및 누적 정보</div><div class=\"list\"><div class=\"chip\" id=\"warn\">경고: ---</div><div class=\"chip\" id=\"rest\">휴식: -</div><div class=\"chip\" id=\"daily\">일일 누적: 0회 / 0세트</div><div class=\"chip\" id=\"mode-chip\">센서 모드: 확인 중</div></div></section>\n"
 "<section class=\"card full\"><div class=\"label\">최근 속도 기록</div><div class=\"history\" id=\"history\"></div><div class=\"footer\">0.5초마다 자동으로 갱신됩니다.</div></section>\n"
+"<section class=\"card full\" id=\"rfid-section\"><div class=\"label\">RFID 사용자</div><div id=\"current-user-name\" class=\"value\" style=\"font-size:28px\">-</div><div class=\"controls\" style=\"margin-top:16px\"><button class=\"btn\" id=\"scan-btn\">카드 갖다대기 (등록)</button></div><div id=\"reg-form\" class=\"rfid-form\" style=\"display:none;margin-top:16px\"><div class=\"controls\"><input id=\"reg-name\" placeholder=\"이름\"><input id=\"reg-weight\" type=\"number\" placeholder=\"체중(kg)\" min=\"1\" max=\"300\"><input id=\"reg-goal\" type=\"number\" placeholder=\"목표세트\" min=\"1\" max=\"20\"><button class=\"btn\" id=\"reg-submit\">등록</button></div><div id=\"reg-uid-label\" class=\"meta\" style=\"margin-top:8px\"></div></div><div id=\"rfid-meta\" class=\"meta\" style=\"margin-top:8px\">카드를 리더기에 태그하면 사용자가 전환됩니다.</div><div class=\"card rfid-panel\"><div class=\"label\">오늘 세션 통계</div><div class=\"list\"><div class=\"chip\" id=\"user-session-reps\">렙: -</div><div class=\"chip\" id=\"user-session-sets\">세트: -</div><div class=\"chip\" id=\"user-total-reps\">누적 렙: -</div><div class=\"chip\" id=\"user-total-sets\">누적 세트: -</div><div class=\"chip\" id=\"user-goal\">목표: -</div></div></div></section>\n"
 "</div>\n"
 "</div>\n"
 "<script>\n"
@@ -110,9 +152,10 @@ static const char DASHBOARD_HTML[] =
 "function statusInfo(data){if(data.active){if(data.warn==='slow')return{text:'운동 중',cls:'danger'};if(data.warn==='fast')return{text:'운동 중',cls:'warn'};return{text:'운동 중',cls:'active'};}if(data.tracking)return{text:'중지됨',cls:'paused'};return{text:'감지 중(저장 안 함)',cls:'monitor'};}\n"
 "function renderBars(history){const host=document.getElementById('history');host.innerHTML='';if(!history.length){host.innerHTML='<div class=\"meta\">아직 속도 기록이 없습니다.</div>';return;}const max=Math.max(...history,1);history.forEach(v=>{const bar=document.createElement('div');bar.className='bar';bar.style.height=Math.max(24,Math.round((v/max)*120))+'px';const label=document.createElement('span');label.textContent=v+'ms';bar.appendChild(label);host.appendChild(bar);});}\n"
 "function boardLabel(name,status,seconds,extra){if(status==='checking')return name+': 확인 중';if(status==='online')return name+': 온라인 ('+seconds+'초 전'+(extra?' · '+extra:'')+')';return name+': 오프라인';}\n"
+"async function refreshStats(){try{const res=await fetch('/api/stats/current',{cache:'no-store'});const s=await res.json();if(s.logged_in){document.getElementById('user-session-reps').textContent='렙: '+s.session_reps;document.getElementById('user-session-sets').textContent='세트: '+s.session_sets;document.getElementById('user-total-reps').textContent='누적 렙: '+s.total_reps;document.getElementById('user-total-sets').textContent='누적 세트: '+s.total_sets;document.getElementById('user-goal').textContent='목표 '+s.goal_sets+'세트 '+(s.goal_achieved?'✓ 달성':'진행중');}else{document.getElementById('user-session-reps').textContent='렙: -';document.getElementById('user-session-sets').textContent='세트: -';document.getElementById('user-total-reps').textContent='누적 렙: -';document.getElementById('user-total-sets').textContent='누적 세트: -';document.getElementById('user-goal').textContent='목표: -';}}catch(e){}}\n"
 "async function sendControl(command){const meta=document.getElementById('control-meta');meta.textContent='명령 전송 중...';try{const res=await fetch('/api/control/'+command,{method:'POST'});const data=await res.json();if(!res.ok||!data.ok)throw new Error(data.error||'request_failed');meta.textContent=command==='start'?'운동 시작 명령을 보냈습니다.':'운동 종료 명령을 보냈습니다.';refresh();}catch(err){meta.textContent='명령 전송 실패: '+err.message;}}\n"
-"async function refresh(){try{const res=await fetch('/api/status',{cache:'no-store'});const data=await res.json();const weight=parseFloat(document.getElementById('weight').value)||70;document.getElementById('net-text').textContent=data.mqtt_ready?'MQTT 연결됨':'MQTT 대기 중';document.getElementById('net-dot').style.background=data.mqtt_ready?'#16a34a':'#f59e0b';const info=statusInfo(data);const statusEl=document.getElementById('status-text');statusEl.textContent=info.text;statusEl.className='value status '+info.cls;document.getElementById('status-meta').textContent='세션 시간 '+data.session_active_sec+'초 | 최근 반복 '+data.speed_rep+' | 경고 '+data.warn;document.getElementById('reps').textContent=esc(data.reps);document.getElementById('sets').textContent=esc(data.sets)+' / '+esc(data.target_sets);document.getElementById('speed').textContent=esc(data.speed_ms)+' ms';document.getElementById('warn').textContent='경고: '+esc(data.warn);document.getElementById('rest').textContent='휴식: '+(data.rest_sec>0?(esc(data.rest_sec)+'초 (세트 '+esc(data.rest_after)+' 후)'):'-');document.getElementById('daily').textContent='일일 누적: '+esc(data.daily_reps)+'회 / '+esc(data.daily_sets)+'세트';document.getElementById('mode-chip').textContent='센서 모드: '+(data.tracking?'저장 중':'모니터링');document.getElementById('sensor-board').textContent=boardLabel('센서 보드',data.sensor_status,data.sensor_seen_sec,data.tracking?'저장 중':'모니터링');document.getElementById('display-board').textContent=boardLabel('디스플레이 보드',data.display_status,data.display_seen_sec,'표시 중');document.getElementById('session-kcal').textContent=fmtKcal(calcKcal(weight,data.session_active_sec));document.getElementById('daily-kcal').textContent=fmtKcal(calcKcal(weight,data.daily_active_sec));renderBars(data.speed_history||[]);}catch(err){document.getElementById('net-text').textContent='대시보드 연결 끊김';document.getElementById('net-dot').style.background='#dc2626';}}\n"
-"window.addEventListener('load',()=>{const weight=document.getElementById('weight');weight.value=loadWeight();weight.addEventListener('input',()=>{saveWeight(weight.value);refresh();});document.getElementById('start-btn').addEventListener('click',()=>sendControl('start'));document.getElementById('stop-btn').addEventListener('click',()=>sendControl('stop'));refresh();setInterval(refresh,500);});\n"
+"async function refresh(){try{const res=await fetch('/api/status',{cache:'no-store'});const data=await res.json();const weight=parseFloat(document.getElementById('weight').value)||70;document.getElementById('net-text').textContent=data.mqtt_ready?'MQTT 연결됨':'MQTT 대기 중';document.getElementById('net-dot').style.background=data.mqtt_ready?'#16a34a':'#f59e0b';const info=statusInfo(data);const statusEl=document.getElementById('status-text');statusEl.textContent=info.text;statusEl.className='value status '+info.cls;document.getElementById('status-meta').textContent='세션 시간 '+data.session_active_sec+'초 | 최근 반복 '+data.speed_rep+' | 경고 '+data.warn;document.getElementById('reps').textContent=esc(data.reps);document.getElementById('sets').textContent=esc(data.sets)+' / '+esc(data.target_sets);document.getElementById('speed').textContent=esc(data.speed_ms)+' ms';document.getElementById('warn').textContent='경고: '+esc(data.warn);document.getElementById('rest').textContent='휴식: '+(data.rest_sec>0?(esc(data.rest_sec)+'초 (세트 '+esc(data.rest_after)+' 후)'):'-');document.getElementById('daily').textContent='일일 누적: '+esc(data.daily_reps)+'회 / '+esc(data.daily_sets)+'세트';document.getElementById('mode-chip').textContent='센서 모드: '+(data.tracking?'저장 중':'모니터링');document.getElementById('sensor-board').textContent=boardLabel('센서 보드',data.sensor_status,data.sensor_seen_sec,data.tracking?'저장 중':'모니터링');document.getElementById('display-board').textContent=boardLabel('디스플레이 보드',data.display_status,data.display_seen_sec,'표시 중');document.getElementById('session-kcal').textContent=fmtKcal(calcKcal(weight,data.session_active_sec));document.getElementById('daily-kcal').textContent=fmtKcal(calcKcal(weight,data.daily_active_sec));renderBars(data.speed_history||[]);const uname=data.current_user||'';document.getElementById('current-user-name').textContent=uname||'로그인 전';if(data.pending_uid&&data.pending_uid.length>0&&document.getElementById('reg-form').style.display==='none'){document.getElementById('reg-form').style.display='block';document.getElementById('reg-uid-label').textContent='카드 UID: '+data.pending_uid;document.getElementById('rfid-meta').textContent='등록 정보를 입력하고 등록 버튼을 누르세요.';}}catch(err){document.getElementById('net-text').textContent='대시보드 연결 끊김';document.getElementById('net-dot').style.background='#dc2626';}}\n"
+"window.addEventListener('load',()=>{const weight=document.getElementById('weight');weight.value=loadWeight();weight.addEventListener('input',()=>{saveWeight(weight.value);refresh();});document.getElementById('start-btn').addEventListener('click',()=>sendControl('start'));document.getElementById('stop-btn').addEventListener('click',()=>sendControl('stop'));document.getElementById('scan-btn').addEventListener('click',async()=>{await fetch('/api/rfid/scan-mode',{method:'POST'});document.getElementById('rfid-meta').textContent='카드를 갖다대세요...';});document.getElementById('reg-submit').addEventListener('click',async()=>{const resp=await fetch('/api/status',{cache:'no-store'});const d=await resp.json();const uid=d.pending_uid;const name=document.getElementById('reg-name').value.trim();const weightValue=parseInt(document.getElementById('reg-weight').value,10)||70;const goal=parseInt(document.getElementById('reg-goal').value,10)||3;if(!uid||!name){alert('이름과 UID를 확인하세요');return;}const res=await fetch('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid,name,weight:weightValue,goal_sets:goal})});const result=await res.json();if(result.ok){document.getElementById('reg-form').style.display='none';document.getElementById('reg-name').value='';document.getElementById('reg-weight').value='';document.getElementById('reg-goal').value='';document.getElementById('rfid-meta').textContent=name+' 등록 완료!';refresh();refreshStats();}else{alert('등록 실패: '+result.error);}});refresh();refreshStats();setInterval(refresh,500);setInterval(refreshStats,1000);});\n"
 "</script>\n"
 "</body>\n"
 "</html>\n";
@@ -229,6 +272,37 @@ static bool publish_control_command(const char *command) {
     return mqtt_send_message(TOPIC_CONTROL, payload) == ERR_OK;
 }
 
+// ─── 플래시 사용자 저장소 ────────────────────────────────────────────────────
+
+static void users_flash_load(void) {
+    const flash_user_block_t *block =
+        (const flash_user_block_t *)(XIP_BASE + FLASH_USER_OFFSET);
+    if (block->magic != FLASH_MAGIC) {
+        printf("[FLASH] 저장된 사용자 없음 (magic 불일치)\n");
+        return;
+    }
+    g_user_count = block->count < MAX_USERS ? block->count : MAX_USERS;
+    memcpy(g_users, block->users, (size_t)g_user_count * sizeof(user_t));
+    printf("[FLASH] 사용자 %d명 로드\n", g_user_count);
+}
+
+static void users_flash_save(void) {
+    static uint8_t buf[FLASH_USER_SIZE] __attribute__((aligned(4)));
+    flash_user_block_t *block = (flash_user_block_t *)buf;
+
+    memset(buf, 0xFF, sizeof(buf));
+    block->magic = FLASH_MAGIC;
+    block->count = (uint8_t)g_user_count;
+    memcpy(block->users, g_users, (size_t)g_user_count * sizeof(user_t));
+
+    uint32_t ints = save_and_disable_interrupts();
+    flash_range_erase(FLASH_USER_OFFSET, FLASH_SECTOR_SIZE);
+    flash_range_program(FLASH_USER_OFFSET, buf, FLASH_USER_SIZE);
+    restore_interrupts(ints);
+
+    printf("[FLASH] 사용자 %d명 저장\n", g_user_count);
+}
+
 static void on_publish(void *arg, const char *topic, u32_t tot_len) {
     (void)arg;
     (void)tot_len;
@@ -278,6 +352,47 @@ static void on_data(void *arg, const u8_t *data, u16_t len, u8_t flags) {
         mark_sensor_seen();
     } else if (strcmp(g_cur_topic, TOPIC_DISPLAY_STATUS) == 0) {
         mark_display_seen();
+    } else if (strcmp(g_cur_topic, TOPIC_RFID_UID) == 0) {
+        char uid[12];
+        json_str(g_payload, "uid", uid, sizeof(uid));
+        if (uid[0] == '\0') return;
+
+        // 등록 대기 모드: UID 캡처만 하고 사용자 전환 안 함
+        if (g_scan_mode) {
+            memcpy(g_pending_uid, uid, sizeof(g_pending_uid));
+            g_scan_mode = false;
+            printf("[RFID] 등록 대기 UID 캡처: %s\n", uid);
+            return;
+        }
+
+        // 사용자 조회
+        for (int i = 0; i < g_user_count; i++) {
+            if (strcmp(g_users[i].uid, uid) == 0) {
+                // 이전 사용자 통계 스냅샷 저장
+                if (g_current_user >= 0) {
+                    int prev = g_current_user;
+                    g_stats[prev].today_reps  = g_daily_reps - g_stats[prev].reps_at_login;
+                    g_stats[prev].today_sets  = g_daily_sets - g_stats[prev].sets_at_login;
+                    g_stats[prev].total_reps += g_stats[prev].today_reps;
+                    g_stats[prev].total_sets += g_stats[prev].today_sets;
+                }
+                // 새 사용자 전환
+                g_current_user = i;
+                g_stats[i].reps_at_login = g_daily_reps;
+                g_stats[i].sets_at_login = g_daily_sets;
+
+                char payload[96];
+                snprintf(payload, sizeof(payload),
+                         "{\"name\":\"%s\",\"uid\":\"%s\","
+                         "\"weight\":%d,\"goal_sets\":%d}",
+                         g_users[i].name, uid,
+                         g_users[i].weight_kg, g_users[i].goal_sets);
+                mqtt_send_message(TOPIC_RFID_USER, payload);
+                printf("[RFID] 사용자 전환: %s\n", g_users[i].name);
+                return;
+            }
+        }
+        printf("[RFID] 미등록 카드: %s\n", uid);
     }
 }
 
@@ -294,6 +409,7 @@ static void subscribe_dashboard_topics(mqtt_client_t *client) {
     mqtt_subscribe(client, TOPIC_DAILY, 0, on_sub, NULL);
     mqtt_subscribe(client, TOPIC_SENSOR_STATUS, 0, on_sub, NULL);
     mqtt_subscribe(client, TOPIC_DISPLAY_STATUS, 0, on_sub, NULL);
+    mqtt_subscribe(client, TOPIC_RFID_UID, 0, on_sub, NULL);
 }
 
 static void on_connect(mqtt_client_t *client, void *arg, mqtt_connection_status_t status) {
@@ -390,7 +506,10 @@ static int build_status_json(char *out, size_t out_size) {
         "\"display_status\":\"%s\","
         "\"display_online\":%s,"
         "\"display_seen_sec\":%u,"
-        "\"speed_history\":%s"
+        "\"speed_history\":%s,"
+        "\"current_user\":\"%s\","
+        "\"scan_mode\":%s,"
+        "\"pending_uid\":\"%s\""
         "}",
         g_mqtt_ready ? "true" : "false",
         g_active ? "true" : "false",
@@ -416,7 +535,10 @@ static int build_status_json(char *out, size_t out_size) {
         display_state,
         strcmp(display_state, "online") == 0 ? "true" : "false",
         (unsigned)display_seen_sec,
-        history
+        history,
+        g_current_user >= 0 ? g_users[g_current_user].name : "",
+        g_scan_mode ? "true" : "false",
+        g_pending_uid
     );
 }
 
@@ -477,7 +599,7 @@ static err_t http_send_control_result(struct tcp_pcb *tpcb, bool ok, const char 
 }
 
 static err_t http_send_status(struct tcp_pcb *tpcb) {
-    char json[512];
+    char json[768];
     build_status_json(json, sizeof(json));
     return http_send_checked_response(
         tpcb, "200 OK", "application/json; charset=utf-8", json
@@ -502,6 +624,114 @@ static err_t http_finish_response(struct tcp_pcb *tpcb, http_state_t *state, err
     if (state) free(state);
     tcp_abort(tpcb);
     return ERR_ABRT;
+}
+
+// ─── 사용자 관리 API 핸들러 ──────────────────────────────────────────────────
+
+static err_t handle_get_users(struct tcp_pcb *tpcb) {
+    char body[1024];
+    size_t pos = 0;
+    pos += (size_t)snprintf(body + pos, sizeof(body) - pos, "[");
+    for (int i = 0; i < g_user_count && pos < sizeof(body); i++) {
+        pos += (size_t)snprintf(
+            body + pos, sizeof(body) - pos,
+            "%s{\"uid\":\"%s\",\"name\":\"%s\","
+            "\"weight\":%d,\"goal_sets\":%d}",
+            i ? "," : "",
+            g_users[i].uid, g_users[i].name,
+            g_users[i].weight_kg, g_users[i].goal_sets
+        );
+    }
+    snprintf(body + pos, sizeof(body) - pos, "]");
+    return http_send_checked_response(
+        tpcb, "200 OK", "application/json; charset=utf-8", body
+    );
+}
+
+static err_t handle_post_user(struct tcp_pcb *tpcb, const char *request) {
+    const char *body = strstr(request, "\r\n\r\n");
+    if (!body) {
+        return http_send_not_found(tpcb);
+    }
+    body += 4;
+
+    if (g_user_count >= MAX_USERS) {
+        return http_send_control_result(tpcb, false, "max_users_reached");
+    }
+
+    user_t u = {0};
+    json_str(body, "uid", u.uid, sizeof(u.uid));
+    json_str(body, "name", u.name, sizeof(u.name));
+    u.weight_kg = (uint8_t)json_int(body, "weight");
+    u.goal_sets = (uint8_t)json_int(body, "goal_sets");
+
+    if (u.uid[0] == '\0' || u.name[0] == '\0') {
+        return http_send_control_result(tpcb, false, "missing_fields");
+    }
+
+    for (int i = 0; i < g_user_count; i++) {
+        if (strcmp(g_users[i].uid, u.uid) == 0) {
+            return http_send_control_result(tpcb, false, "uid_exists");
+        }
+    }
+
+    g_users[g_user_count++] = u;
+    users_flash_save();
+    g_pending_uid[0] = '\0';
+    printf("[USER] 등록: %s (%s)\n", u.name, u.uid);
+    return http_send_control_result(tpcb, true, "");
+}
+
+static err_t handle_get_current_user(struct tcp_pcb *tpcb) {
+    char body[128];
+    if (g_current_user < 0) {
+        snprintf(body, sizeof(body), "{\"logged_in\":false}");
+    } else {
+        user_t *u = &g_users[g_current_user];
+        snprintf(body, sizeof(body),
+                 "{\"logged_in\":true,\"name\":\"%s\","
+                 "\"weight\":%d,\"goal_sets\":%d}",
+                 u->name, u->weight_kg, u->goal_sets);
+    }
+    return http_send_checked_response(
+        tpcb, "200 OK", "application/json; charset=utf-8", body
+    );
+}
+
+static err_t handle_scan_mode(struct tcp_pcb *tpcb) {
+    g_scan_mode = true;
+    g_pending_uid[0] = '\0';
+    printf("[RFID] 등록 대기 모드 진입\n");
+    return http_send_control_result(tpcb, true, "");
+}
+
+static err_t handle_get_current_stats(struct tcp_pcb *tpcb) {
+    char body[256];
+    if (g_current_user < 0) {
+        snprintf(body, sizeof(body), "{\"logged_in\":false}");
+    } else {
+        user_t *u = &g_users[g_current_user];
+        user_stats_t *s = &g_stats[g_current_user];
+        int session_reps = g_daily_reps - s->reps_at_login;
+        int session_sets = g_daily_sets - s->sets_at_login;
+        snprintf(body, sizeof(body),
+                 "{\"logged_in\":true,\"name\":\"%s\","
+                 "\"session_reps\":%d,\"session_sets\":%d,"
+                 "\"total_reps\":%d,\"total_sets\":%d,"
+                 "\"goal_sets\":%d,\"goal_achieved\":%s,"
+                 "\"pending_uid\":\"%s\"}",
+                 u->name,
+                 session_reps < 0 ? 0 : session_reps,
+                 session_sets < 0 ? 0 : session_sets,
+                 s->total_reps + (session_reps > 0 ? session_reps : 0),
+                 s->total_sets + (session_sets > 0 ? session_sets : 0),
+                 u->goal_sets,
+                 session_sets >= u->goal_sets ? "true" : "false",
+                 g_pending_uid);
+    }
+    return http_send_checked_response(
+        tpcb, "200 OK", "application/json; charset=utf-8", body
+    );
 }
 
 static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
@@ -535,6 +765,16 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
     } else if (strncmp(state->request, "POST /api/control/stop ", 23) == 0) {
         response_err = http_send_control_result(tpcb, publish_control_command("stop"),
                                                 g_mqtt_ready ? "" : "mqtt_not_ready");
+    } else if (strncmp(state->request, "GET /api/users/current ", 23) == 0) {
+        response_err = handle_get_current_user(tpcb);
+    } else if (strncmp(state->request, "GET /api/users ", 15) == 0) {
+        response_err = handle_get_users(tpcb);
+    } else if (strncmp(state->request, "POST /api/users ", 16) == 0) {
+        response_err = handle_post_user(tpcb, state->request);
+    } else if (strncmp(state->request, "POST /api/rfid/scan-mode ", 25) == 0) {
+        response_err = handle_scan_mode(tpcb);
+    } else if (strncmp(state->request, "GET /api/stats/current ", 23) == 0) {
+        response_err = handle_get_current_stats(tpcb);
     } else if (strncmp(state->request, "GET / ", 6) == 0 ||
                strncmp(state->request, "GET /HTTP", 9) == 0 ||
                strncmp(state->request, "GET /index.html ", 16) == 0) {
@@ -673,6 +913,7 @@ int main(void) {
         printf("[HTTP] 브라우저에서 열기: http://%s/\n", ip4addr_ntoa(netif_ip4_addr(netif_default)));
     }
 
+    users_flash_load();
     mqtt_connect_broker();
     if (!http_server_init()) {
         cyw43_arch_deinit();
