@@ -11,7 +11,7 @@ Raspberry Pi Pico 2 W 3대로 구성한 푸시업 트래커입니다. 센서 보
 - `Display` 보드가 LCD 16x2와 부저로 반복 수, 속도 경고, 사용자 전환을 표시합니다.
 - `Browser`는 Dashboard 보드의 웹 UI에서 시작/종료 제어와 RFID 등록을 수행합니다.
 
-자세한 흐름은 [docs/architecture.md](docs/architecture.md), RFID 동작은 [docs/rfid-user-flow.md](docs/rfid-user-flow.md), 배선과 네트워크 설정은 [docs/hardware-setup.md](docs/hardware-setup.md)에 정리되어 있습니다.
+자세한 흐름은 [docs/architecture.md](docs/architecture.md), RFID 동작은 [docs/rfid-user-flow.md](docs/rfid-user-flow.md), 배선과 네트워크 설정은 [docs/hardware-setup.md](docs/hardware-setup.md), 제출용 기술서 초안은 [docs/1차_1조_프로젝트_기술서.md](docs/1차_1조_프로젝트_기술서.md)에 정리되어 있습니다.
 
 ## 시스템 구성
 
@@ -37,6 +37,7 @@ Raspberry Pi Pico 2 W 3대로 구성한 푸시업 트래커입니다. 센서 보
 ├── README.md
 ├── docs/
 │   ├── architecture.md
+│   ├── 1차_1조_프로젝트_기술서.md
 │   ├── hardware-setup.md
 │   ├── rfid-user-flow.md
 │   └── assets/
