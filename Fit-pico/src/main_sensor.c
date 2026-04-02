@@ -202,6 +202,7 @@ static void publish_all(void) {
 }
 
 static void start_tracking_session(uint32_t current_ms) {
+    (void)current_ms;
     bool new_session = should_start_new_session();
     if (new_session) {
         reset_session_progress();
@@ -221,6 +222,7 @@ static void start_tracking_session(uint32_t current_ms) {
 }
 
 static void stop_tracking_session(uint32_t current_ms) {
+    (void)current_ms;
     g_tracking_enabled = false;
     g_manual_stop = true;
     g_active = false;
