@@ -98,8 +98,8 @@
   <path class="line" d="M1060 610H1140"/>
   <text x="1086" y="586" class="label">JSON 응답</text>
 
-  <path class="line" d="M1060 660H1140"/>
-  <text x="1068" y="636" class="label">rfid/user + 표시 데이터</text>
+  <path class="line" d="M1060 730H1140"/>
+  <text x="1038" y="706" class="label">rfid/user + 표시 데이터</text>
 
   <path class="line dash" d="M440 430C500 470 518 510 540 556"/>
   <text x="386" y="526" class="flow-note">운동 중 주기적 업데이트</text>
