@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="980" viewBox="0 0 1600 980" role="img" aria-labelledby="title desc">
+  <title id="title">fitness-pico Workflow</title>
+  <desc id="desc">Sensor, MQTT broker, dashboard, browser, and display workflow for fitness-pico.</desc>
+
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0 0L12 6L0 12Z" fill="#35515A"/>
+    </marker>
+    <style>
+      .bg { fill: #f6f7f4; }
+      .panel { fill: #ffffff; stroke: #d7dfdc; stroke-width: 2; }
+      .sensor { fill: #fff4d6; stroke: #d8b45c; stroke-width: 2; }
+      .broker { fill: #dff4ef; stroke: #63a99d; stroke-width: 2; }
+      .dashboard { fill: #e7f0ff; stroke: #6e98de; stroke-width: 2; }
+      .browser { fill: #efe7ff; stroke: #9a7ae0; stroke-width: 2; }
+      .display { fill: #fde7e1; stroke: #dd7f6f; stroke-width: 2; }
+      .chip { fill: #f3f6f5; stroke: #d4ddda; stroke-width: 1.5; }
+      .line { stroke: #35515A; stroke-width: 5; fill: none; stroke-linecap: round; marker-end: url(#arrow); }
+      .dash { stroke-dasharray: 10 10; }
+      .title { font: 700 38px 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; fill: #15262c; }
+      .subtitle { font: 500 18px 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; fill: #5a6a70; }
+      .box-title { font: 700 28px 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; fill: #16272d; }
+      .box-sub { font: 600 16px 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; fill: #486068; }
+      .body { font: 500 18px 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; fill: #24393f; }
+      .small { font: 500 15px 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; fill: #54666c; }
+      .chip-text { font: 700 14px 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; fill: #21363c; }
+      .label { font: 700 16px 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; fill: #2a434a; }
+      .step-num { font: 700 18px 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; fill: #ffffff; }
+      .step-text { font: 600 17px 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; fill: #21363c; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1600" height="980"/>
+
+  <text x="84" y="84" class="title">fitness-pico 워크플로우</text>
+  <text x="84" y="116" class="subtitle">운동 측정, RFID 사용자 등록, 대시보드 제어, 디스플레이 표시 흐름</text>
+
+  <rect class="sensor" x="80" y="180" rx="28" ry="28" width="360" height="330"/>
+  <text x="108" y="236" class="box-title">1. Sensor Node</text>
+  <text x="108" y="266" class="box-sub">Pico W + HC-SR04 + MFRC522</text>
+  <rect class="chip" x="108" y="292" rx="16" ry="16" width="122" height="34"/>
+  <text x="133" y="315" class="chip-text">초음파 측정</text>
+  <rect class="chip" x="242" y="292" rx="16" ry="16" width="122" height="34"/>
+  <text x="276" y="315" class="chip-text">RFID 태그</text>
+  <text x="108" y="372" class="body">• 반복 수, 세트 수, 속도 계산</text>
+  <text x="108" y="406" class="body">• 카드 UID 읽기</text>
+  <text x="108" y="440" class="body">• MQTT로 운동 상태와 UID 발행</text>
+  <text x="108" y="476" class="small">publish: sensor/count, speed, rest, daily, status, rfid/uid</text>
+
+  <rect class="broker" x="540" y="120" rx="28" ry="28" width="520" height="220"/>
+  <text x="568" y="176" class="box-title">2. MQTT Broker</text>
+  <text x="568" y="206" class="box-sub">이 노트북에서 실행하는 Mosquitto</text>
+  <rect class="chip" x="568" y="236" rx="16" ry="16" width="180" height="34"/>
+  <text x="596" y="259" class="chip-text">172.30.1.29:1883</text>
+  <rect class="chip" x="762" y="236" rx="16" ry="16" width="170" height="34"/>
+  <text x="790" y="259" class="chip-text">anonymous 허용</text>
+  <text x="568" y="306" class="body">• 센서, 대시보드, 디스플레이 간 MQTT 메시지 중계</text>
+
+  <rect class="browser" x="1140" y="120" rx="28" ry="28" width="380" height="250"/>
+  <text x="1168" y="176" class="box-title">3. Browser</text>
+  <text x="1168" y="206" class="box-sub">PC / 모바일에서 접속</text>
+  <rect class="chip" x="1168" y="234" rx="16" ry="16" width="292" height="34"/>
+  <text x="1188" y="257" class="chip-text">http://fitpico-dashboard.local/</text>
+  <text x="1168" y="314" class="body">• 운동 시작 / 종료</text>
+  <text x="1168" y="348" class="body">• RFID 사용자 등록</text>
+
+  <rect class="dashboard" x="540" y="440" rx="28" ry="28" width="520" height="340"/>
+  <text x="568" y="496" class="box-title">4. Dashboard Node</text>
+  <text x="568" y="526" class="box-sub">Pico W + HTTP 서버 + mDNS + Flash 저장소</text>
+  <text x="568" y="586" class="body">• MQTT로 센서 상태와 RFID UID 수신</text>
+  <text x="568" y="620" class="body">• scan mode에서 UID 캡처</text>
+  <text x="568" y="654" class="body">• 브라우저 요청으로 사용자 등록</text>
+  <text x="568" y="688" class="body">• Flash에 사용자 저장 후 현재 사용자 전환</text>
+  <text x="568" y="734" class="small">subscribe: sensor/*, display/status, rfid/uid</text>
+  <text x="568" y="760" class="small">publish: control, rfid/user</text>
+
+  <rect class="display" x="1140" y="500" rx="28" ry="28" width="380" height="250"/>
+  <text x="1168" y="556" class="box-title">5. Display Node</text>
+  <text x="1168" y="586" class="box-sub">Pico W + LCD + Buzzer</text>
+  <text x="1168" y="646" class="body">• 반복/세트/속도 표시</text>
+  <text x="1168" y="680" class="body">• 경고와 목표 달성 알림</text>
+  <text x="1168" y="714" class="body">• 현재 사용자 이름 표시</text>
+
+  <path class="line" d="M440 300C485 286 505 268 540 248"/>
+  <text x="430" y="256" class="label">운동 상태 + RFID UID 발행</text>
+
+  <path class="line" d="M800 340V440"/>
+  <text x="824" y="398" class="label">sensor/status 수신</text>
+
+  <path class="line" d="M1060 240H1140"/>
+  <text x="1078" y="220" class="label">mDNS / HTTP</text>
+
+  <path class="line" d="M1260 370C1220 420 1140 474 1060 540"/>
+  <text x="1160" y="430" class="label">HTTP 요청</text>
+
+  <path class="line" d="M1060 610H1140"/>
+  <text x="1084" y="590" class="label">JSON 응답</text>
+
+  <path class="line" d="M1060 660H1140"/>
+  <text x="1076" y="640" class="label">rfid/user + 표시 데이터</text>
+
+  <path class="line dash" d="M440 430C500 470 518 510 540 556"/>
+  <text x="402" y="494" class="small">운동 중 주기적 업데이트</text>
+
+  <rect class="panel" x="80" y="840" rx="24" ry="24" width="1440" height="94"/>
+  <circle cx="140" cy="887" r="22" fill="#0f766e"/>
+  <text x="133" y="894" class="step-num">1</text>
+  <text x="176" y="894" class="step-text">센서 보드가 운동과 RFID UID를 읽어 MQTT로 발행</text>
+  <circle cx="500" cy="887" r="22" fill="#5a92e4"/>
+  <text x="493" y="894" class="step-num">2</text>
+  <text x="536" y="894" class="step-text">대시보드가 UID를 받아 등록 대기 또는 사용자 전환 처리</text>
+  <circle cx="943" cy="887" r="22" fill="#9a7ae0"/>
+  <text x="936" y="894" class="step-num">3</text>
+  <text x="979" y="894" class="step-text">브라우저가 등록 요청과 운동 제어를 보냄</text>
+  <circle cx="1298" cy="887" r="22" fill="#dd7f6f"/>
+  <text x="1291" y="894" class="step-num">4</text>
+  <text x="1334" y="894" class="step-text">디스플레이 보드가 현재 상태와 사용자 이름 표시</text>
+</svg>
