@@ -354,8 +354,8 @@ static bool mfrc_detect_card(void) {
     mfrc_write(MFRC_CommandReg,  PCD_Transceive);
     mfrc_set_bits(MFRC_BitFramingReg, 0x80);
 
-    uint32_t deadline = time_us_32() + 25000u;
-    while (time_us_32() < deadline) {
+    uint32_t start = time_us_32();
+    while ((time_us_32() - start) < 25000u) {
         uint8_t irq = mfrc_read(MFRC_ComIrqReg);
         if (irq & 0x30) break;
         if (irq & 0x01) return false;
@@ -377,15 +377,15 @@ static bool mfrc_read_uid(uint8_t uid[4]) {
     mfrc_write(MFRC_CommandReg,  PCD_Transceive);
     mfrc_set_bits(MFRC_BitFramingReg, 0x80);
 
-    uint32_t deadline = time_us_32() + 25000u;
-    while (time_us_32() < deadline) {
+    uint32_t start = time_us_32();
+    while ((time_us_32() - start) < 25000u) {
         uint8_t irq = mfrc_read(MFRC_ComIrqReg);
         if (irq & 0x30) break;
         if (irq & 0x01) return false;
     }
     uint8_t err = mfrc_read(MFRC_ErrorReg);
     if (err & 0x1B) return false;
-    if (mfrc_read(MFRC_FIFOLevelReg) < 4) return false;
+    if (mfrc_read(MFRC_FIFOLevelReg) < 5) return false;
 
     for (int i = 0; i < 4; i++) uid[i] = mfrc_read(MFRC_FIFODataReg);
     return true;
@@ -402,7 +402,7 @@ static void handle_rfid_scan(uint32_t current_ms) {
     uint8_t uid[4];
     if (!mfrc_read_uid(uid)) return;
 
-    char uid_str[12];
+    char uid_str[12] = {0};
     rfid_uid_to_str(uid, uid_str);
 
     // 쿨다운: 같은 카드를 RFID_SCAN_COOLDOWN_MS 내에 재발행하지 않음
