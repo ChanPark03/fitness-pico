@@ -143,6 +143,8 @@ static int  g_daily_reps  = 0;
 static int  g_daily_sets  = 0;
 static int  g_rest_set    = 0;
 static int  g_rest_sec    = 0;
+static char g_current_user_name[20] = {0};
+static uint32_t g_user_display_until_ms = 0;
 
 static bool g_dirty = true;
 static bool g_wifi_ready = false;
@@ -225,6 +227,10 @@ static void mqtt_send(const char *topic, const char *payload) {
     if (!g_mqtt_ready || !g_mqtt_client) return;
     mqtt_publish(g_mqtt_client, topic, payload,
                  (uint16_t)strlen(payload), 0, 0, NULL, NULL);
+}
+
+static uint32_t now_ms(void) {
+    return to_ms_since_boot(get_absolute_time());
 }
 
 static void buzzer_tone(uint32_t frequency_hz, uint32_t duration_ms) {
@@ -379,6 +385,10 @@ static void on_data(void *arg, const u8_t *data, u16_t len, u8_t flags) {
     } else if (strcmp(g_cur_topic, TOPIC_DAILY) == 0) {
         g_daily_reps = json_int(g_payload, "total_reps");
         g_daily_sets = json_int(g_payload, "total_sets");
+    } else if (strcmp(g_cur_topic, TOPIC_RFID_USER) == 0) {
+        json_str(g_payload, "name", g_current_user_name, sizeof(g_current_user_name));
+        g_user_display_until_ms = now_ms() + 3000;
+        printf("[RFID] 사용자 전환: %s\n", g_current_user_name);
     }
     g_dirty = true;
 }
@@ -387,6 +397,16 @@ static void render_display(void) {
     char line[17];
     display_state_t state = current_display_state();
     const char *status = state.active ? "ACTV" : (state.tracking ? "PAUS" : "MONI");
+
+    if (g_current_user_name[0] != '\0' && now_ms() < g_user_display_until_ms) {
+        snprintf(line, sizeof(line), "HI %-13s", g_current_user_name);
+        lcd_puts_line(0, line);
+
+        snprintf(line, sizeof(line), "%d[%s]TD:%d",
+                 state.speed_ms, state.warn, state.daily_reps);
+        lcd_puts_line(1, line);
+        return;
+    }
 
     snprintf(line, sizeof(line), "R:%-2d S:%d/%d %s",
              state.reps, state.sets, TARGET_SETS,
@@ -418,6 +438,7 @@ static void on_connect(mqtt_client_t *client, void *arg,
     mqtt_subscribe(client, TOPIC_SPEED, 0, on_sub, NULL);
     mqtt_subscribe(client, TOPIC_REST, 0, on_sub, NULL);
     mqtt_subscribe(client, TOPIC_DAILY, 0, on_sub, NULL);
+    mqtt_subscribe(client, TOPIC_RFID_USER, 0, on_sub, NULL);
 }
 
 static void mqtt_connect_broker(void) {
