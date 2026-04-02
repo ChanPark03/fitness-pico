@@ -20,3 +20,4 @@ secrets.py
 
 # IDE
 .vscode/settings.json
+.worktrees/
