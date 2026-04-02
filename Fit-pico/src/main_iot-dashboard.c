@@ -13,9 +13,42 @@
 #include "lwip/tcp.h"
 #include "lwip/apps/mdns.h"
 
+#include "hardware/flash.h"
+#include "hardware/sync.h"
+
 #include "config.h"
 
 #define HTTP_PORT 80
+#define MAX_USERS           8
+#define FLASH_MAGIC         0xFD5A1234U
+#define FLASH_USER_SIZE     512    // 2 flash pages (각 256 bytes)
+#define FLASH_USER_OFFSET   (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)
+
+typedef struct __attribute__((packed)) {
+    char    uid[12];      // "A3:B2:C1:D0\0"
+    char    name[20];
+    uint8_t weight_kg;
+    uint8_t goal_sets;
+    uint8_t _pad[2];
+} user_t;   // 36 bytes
+
+typedef struct {
+    uint32_t magic;
+    uint8_t  count;
+    uint8_t  _pad[3];
+    user_t   users[MAX_USERS];      // 8 * 36 = 288 bytes
+    uint8_t  _fill[512 - 8 - 288];  // = 216 bytes, 총 512
+} flash_user_block_t;
+
+typedef struct {
+    int      today_reps;
+    int      today_sets;
+    int      total_reps;
+    int      total_sets;
+    int      reps_at_login;   // 로그인 시점 g_daily_reps 스냅샷
+    int      sets_at_login;
+} user_stats_t;
+
 #define HTTP_REQ_BUF_SIZE 768
 #define HTTP_POLL_INTERVAL_MS 500
 #define DASHBOARD_HOSTNAME "fitpico-dashboard"
@@ -55,6 +88,13 @@ static int g_hist_idx = 0;
 static int g_hist_count = 0;
 
 static struct tcp_pcb *g_http_pcb = NULL;
+
+static user_t       g_users[MAX_USERS]      = {0};
+static user_stats_t g_stats[MAX_USERS]      = {0};
+static int          g_user_count            = 0;
+static int          g_current_user          = -1;   // -1 = 미로그인
+static bool         g_scan_mode             = false;
+static char         g_pending_uid[12]       = {0};
 
 static const char DASHBOARD_HTML[] =
 "<!doctype html>\n"
@@ -212,6 +252,37 @@ static bool publish_control_command(const char *command) {
     char payload[48];
     snprintf(payload, sizeof(payload), "{\"command\":\"%s\"}", command);
     return mqtt_send_message(TOPIC_CONTROL, payload) == ERR_OK;
+}
+
+// ─── 플래시 사용자 저장소 ────────────────────────────────────────────────────
+
+static void users_flash_load(void) {
+    const flash_user_block_t *block =
+        (const flash_user_block_t *)(XIP_BASE + FLASH_USER_OFFSET);
+    if (block->magic != FLASH_MAGIC) {
+        printf("[FLASH] 저장된 사용자 없음 (magic 불일치)\n");
+        return;
+    }
+    g_user_count = block->count < MAX_USERS ? block->count : MAX_USERS;
+    memcpy(g_users, block->users, (size_t)g_user_count * sizeof(user_t));
+    printf("[FLASH] 사용자 %d명 로드\n", g_user_count);
+}
+
+static void users_flash_save(void) {
+    static uint8_t buf[FLASH_USER_SIZE] __attribute__((aligned(4)));
+    flash_user_block_t *block = (flash_user_block_t *)buf;
+
+    memset(buf, 0xFF, sizeof(buf));
+    block->magic = FLASH_MAGIC;
+    block->count = (uint8_t)g_user_count;
+    memcpy(block->users, g_users, (size_t)g_user_count * sizeof(user_t));
+
+    uint32_t ints = save_and_disable_interrupts();
+    flash_range_erase(FLASH_USER_OFFSET, FLASH_SECTOR_SIZE);
+    flash_range_program(FLASH_USER_OFFSET, buf, FLASH_USER_SIZE);
+    restore_interrupts(ints);
+
+    printf("[FLASH] 사용자 %d명 저장\n", g_user_count);
 }
 
 static void on_publish(void *arg, const char *topic, u32_t tot_len) {
@@ -590,6 +661,7 @@ int main(void) {
         printf("[HTTP] 브라우저에서 열기: http://%s/\n", ip4addr_ntoa(netif_ip4_addr(netif_default)));
     }
 
+    users_flash_load();
     mqtt_connect_broker();
     if (!http_server_init()) {
         cyw43_arch_deinit();
