@@ -14,6 +14,7 @@
 #include "pico/stdlib.h"
 #include "pico/cyw43_arch.h"
 #include "hardware/gpio.h"
+#include "hardware/spi.h"
 
 #include "lwip/apps/mqtt.h"
 #include "lwip/ip_addr.h"
@@ -21,6 +22,28 @@
 #include "config.h"
 
 #define DEFAULT_REST_SEC 45
+
+// ─── MFRC522 레지스터 ────────────────────────────────────────────────────────
+#define MFRC_CommandReg    0x01
+#define MFRC_ComIrqReg     0x04
+#define MFRC_ErrorReg      0x06
+#define MFRC_FIFODataReg   0x09
+#define MFRC_FIFOLevelReg  0x0A
+#define MFRC_BitFramingReg 0x0D
+#define MFRC_ModeReg       0x11
+#define MFRC_TxControlReg  0x14
+#define MFRC_TxASKReg      0x15
+#define MFRC_TModeReg      0x2A
+#define MFRC_TPrescalerReg 0x2B
+#define MFRC_TReloadRegH   0x2C
+#define MFRC_TReloadRegL   0x2D
+
+#define PCD_Idle       0x00
+#define PCD_Transceive 0x0C
+#define PCD_SoftReset  0x0F
+
+#define PICC_REQA      0x26
+#define PICC_ANTICOLL  0x93
 
 typedef enum { POS_UP = 0, POS_DOWN = 1 } Position;
 
@@ -49,6 +72,9 @@ static uint32_t  g_daily_active_ms   = 0;
 static uint32_t  g_rep_down_ms       = 0;
 static uint32_t  g_set_end_ms        = 0;
 static Position  g_pushup_pos        = POS_UP;
+
+static char     g_last_uid[12]     = {0};
+static uint32_t g_last_uid_ms      = 0;
 
 static const uint32_t WIFI_AUTH_MODES[] = {
     CYW43_AUTH_WPA2_AES_PSK,
@@ -264,6 +290,136 @@ static int count_pushup_rep(float cm, uint32_t current_ms) {
     return 0;
 }
 
+// ─── MFRC522 SPI 드라이버 ───────────────────────────────────────────────────
+
+static uint8_t mfrc_read(uint8_t reg) {
+    uint8_t tx = (uint8_t)((reg << 1) | 0x80);
+    uint8_t rx = 0;
+    gpio_put(RFID_CS_PIN, 0);
+    spi_write_blocking(spi0, &tx, 1);
+    spi_read_blocking(spi0, 0x00, &rx, 1);
+    gpio_put(RFID_CS_PIN, 1);
+    return rx;
+}
+
+static void mfrc_write(uint8_t reg, uint8_t val) {
+    uint8_t buf[2] = { (uint8_t)((reg << 1) & 0x7E), val };
+    gpio_put(RFID_CS_PIN, 0);
+    spi_write_blocking(spi0, buf, 2);
+    gpio_put(RFID_CS_PIN, 1);
+}
+
+static void mfrc_set_bits(uint8_t reg, uint8_t mask) {
+    mfrc_write(reg, mfrc_read(reg) | mask);
+}
+
+static void mfrc_init(void) {
+    spi_init(spi0, 1000 * 1000);
+    gpio_set_function(RFID_MISO_PIN, GPIO_FUNC_SPI);
+    gpio_set_function(RFID_SCK_PIN,  GPIO_FUNC_SPI);
+    gpio_set_function(RFID_MOSI_PIN, GPIO_FUNC_SPI);
+
+    gpio_init(RFID_CS_PIN);
+    gpio_set_dir(RFID_CS_PIN, GPIO_OUT);
+    gpio_put(RFID_CS_PIN, 1);
+
+    gpio_init(RFID_RST_PIN);
+    gpio_set_dir(RFID_RST_PIN, GPIO_OUT);
+    gpio_put(RFID_RST_PIN, 1);
+    sleep_ms(50);
+
+    mfrc_write(MFRC_CommandReg, PCD_SoftReset);
+    sleep_ms(50);
+
+    mfrc_write(MFRC_TModeReg,      0x80);
+    mfrc_write(MFRC_TPrescalerReg, 0xA9);
+    mfrc_write(MFRC_TReloadRegH,   0x03);
+    mfrc_write(MFRC_TReloadRegL,   0xE8);
+    mfrc_write(MFRC_TxASKReg,      0x40);
+    mfrc_write(MFRC_ModeReg,       0x3D);
+    mfrc_set_bits(MFRC_TxControlReg, 0x03);   // 안테나 ON
+
+    printf("[RFID] MFRC522 초기화 완료\n");
+}
+
+// 카드 감지 (REQA). 카드 있으면 true.
+static bool mfrc_detect_card(void) {
+    mfrc_write(MFRC_BitFramingReg, 0x07);
+    mfrc_write(MFRC_CommandReg,    PCD_Idle);
+    mfrc_write(MFRC_ComIrqReg,     0x7F);
+    mfrc_write(MFRC_FIFOLevelReg,  0x80);
+
+    uint8_t cmd = PICC_REQA;
+    mfrc_write(MFRC_FIFODataReg, cmd);
+    mfrc_write(MFRC_CommandReg,  PCD_Transceive);
+    mfrc_set_bits(MFRC_BitFramingReg, 0x80);
+
+    uint32_t deadline = time_us_32() + 25000u;
+    while (time_us_32() < deadline) {
+        uint8_t irq = mfrc_read(MFRC_ComIrqReg);
+        if (irq & 0x30) break;
+        if (irq & 0x01) return false;
+    }
+    uint8_t err = mfrc_read(MFRC_ErrorReg);
+    if (err & 0x1B) return false;
+    return (mfrc_read(MFRC_FIFOLevelReg) >= 2);
+}
+
+// UID 4바이트 읽기. 성공하면 true.
+static bool mfrc_read_uid(uint8_t uid[4]) {
+    mfrc_write(MFRC_BitFramingReg, 0x00);
+    mfrc_write(MFRC_CommandReg,    PCD_Idle);
+    mfrc_write(MFRC_ComIrqReg,     0x7F);
+    mfrc_write(MFRC_FIFOLevelReg,  0x80);
+
+    mfrc_write(MFRC_FIFODataReg, PICC_ANTICOLL);
+    mfrc_write(MFRC_FIFODataReg, 0x20);
+    mfrc_write(MFRC_CommandReg,  PCD_Transceive);
+    mfrc_set_bits(MFRC_BitFramingReg, 0x80);
+
+    uint32_t deadline = time_us_32() + 25000u;
+    while (time_us_32() < deadline) {
+        uint8_t irq = mfrc_read(MFRC_ComIrqReg);
+        if (irq & 0x30) break;
+        if (irq & 0x01) return false;
+    }
+    uint8_t err = mfrc_read(MFRC_ErrorReg);
+    if (err & 0x1B) return false;
+    if (mfrc_read(MFRC_FIFOLevelReg) < 4) return false;
+
+    for (int i = 0; i < 4; i++) uid[i] = mfrc_read(MFRC_FIFODataReg);
+    return true;
+}
+
+static void rfid_uid_to_str(const uint8_t uid[4], char out[12]) {
+    snprintf(out, 12, "%02X:%02X:%02X:%02X",
+             uid[0], uid[1], uid[2], uid[3]);
+}
+
+static void handle_rfid_scan(uint32_t current_ms) {
+    if (!mfrc_detect_card()) return;
+
+    uint8_t uid[4];
+    if (!mfrc_read_uid(uid)) return;
+
+    char uid_str[12];
+    rfid_uid_to_str(uid, uid_str);
+
+    // 쿨다운: 같은 카드를 RFID_SCAN_COOLDOWN_MS 내에 재발행하지 않음
+    if (strcmp(uid_str, g_last_uid) == 0 &&
+        (current_ms - g_last_uid_ms) < RFID_SCAN_COOLDOWN_MS) {
+        return;
+    }
+
+    memcpy(g_last_uid, uid_str, sizeof(g_last_uid));
+    g_last_uid_ms = current_ms;
+
+    char payload[32];
+    snprintf(payload, sizeof(payload), "{\"uid\":\"%s\"}", uid_str);
+    mqtt_send(TOPIC_RFID_UID, payload);
+    printf("[RFID] 카드 감지: %s\n", uid_str);
+}
+
 static void init_sensor_gpio(void) {
     gpio_init(HCSR04_TRIG_PIN);
     gpio_set_dir(HCSR04_TRIG_PIN, GPIO_OUT);
@@ -271,6 +427,8 @@ static void init_sensor_gpio(void) {
 
     gpio_init(HCSR04_ECHO_PIN);
     gpio_set_dir(HCSR04_ECHO_PIN, GPIO_IN);
+
+    mfrc_init();   // ← 추가
 }
 
 static void handle_pushup_detection(float cm, uint32_t current_ms) {
@@ -431,6 +589,8 @@ static void publish_periodic_updates(uint32_t current_ms, periodic_state_t *stat
 }
 
 static void poll_inputs_and_motion(uint32_t current_ms) {
+    handle_rfid_scan(current_ms);   // ← 추가
+
     float cm = hcsr04_read_cm();
     if (g_tracking_enabled) {
         handle_pushup_detection(cm, current_ms);
