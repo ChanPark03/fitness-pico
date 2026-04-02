@@ -18,7 +18,6 @@
 // ─── 핀 정의 (팀원 A — 센서 노드) ──────────────────────────────────────────
 #define HCSR04_TRIG_PIN   14
 #define HCSR04_ECHO_PIN   15
-#define PIR_PIN           16
 
 // ─── 디스플레이 보드 출력 장치 ─────────────────────────────────────────────
 #define BUZZER_PIN            18    // 디스플레이 보드 버저 핀
@@ -28,8 +27,6 @@
 #define PUSHUP_UP_CM          28.0f  // 올라온 기준 (cm)
 #define REPS_PER_SET          10     // 한 세트 반복 횟수
 #define TARGET_SETS           3      // 목표 세트 수
-
-#define PIR_TIMEOUT_MS        30000  // PIR 무동작 자동 정지 타임아웃 (ms)
 
 // ─── 운동 속도 기준 ──────────────────────────────────────────────────────────
 #define REP_TOO_FAST_MS       800    // 이보다 빠르면 너무 빠름 경고 (ms)

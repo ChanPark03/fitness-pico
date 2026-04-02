@@ -1,20 +1,10 @@
 /*
  *   - HC-SR04  : 초음파 거리 측정
- *   - PIR      : 움직임 감지
+ *   - MFRC522  : RFID 사용자 인식
  *   - Web/MQTT : 운동 저장 시작/종료 제어
  *
- * MQTT publish 토픽
- *   fitpico/sensor/count   → reps, sets, active, tracking, session_active_sec
- *   fitpico/sensor/rest    → set, rest_sec
- *   fitpico/sensor/speed   → rep, speed_ms, warn
- *   fitpico/sensor/daily   → total_reps, total_sets, daily_active_sec
- *   fitpico/sensor/status  → sensor heartbeat
- *
- * MQTT subscribe 토픽
- *   fitpico/control        → {"command":"start"} / {"command":"stop"}
- *
  * 핀 배치 (config.h 참조)
- *   GP14=TRIG  GP15=ECHO  GP16=PIR
+ *   GP14=TRIG  GP15=ECHO
  */
 
 #include <stdio.h>
@@ -56,7 +46,6 @@ static int       g_daily_reps        = 0;
 static int       g_daily_sets        = 0;
 static uint32_t  g_session_active_ms = 0;
 static uint32_t  g_daily_active_ms   = 0;
-static uint32_t  g_last_pir_ms       = 0;
 static uint32_t  g_rep_down_ms       = 0;
 static uint32_t  g_set_end_ms        = 0;
 static Position  g_pushup_pos        = POS_UP;
@@ -124,7 +113,6 @@ static bool should_start_new_session(void) {
 static void reset_motion_state(void) {
     g_pushup_pos = POS_UP;
     g_rep_down_ms = 0;
-    g_last_pir_ms = 0;
 }
 
 static void reset_session_progress(void) {
@@ -223,8 +211,7 @@ static void start_tracking_session(uint32_t current_ms) {
 
     g_tracking_enabled = true;
     g_manual_stop = false;
-    g_active = false;
-    g_last_pir_ms = 0;
+    g_active = true;          // PIR 없이 즉시 활성화
 
     publish_rest_state(0);
     publish_all();
@@ -282,29 +269,6 @@ static void init_sensor_gpio(void) {
 
     gpio_init(HCSR04_ECHO_PIN);
     gpio_set_dir(HCSR04_ECHO_PIN, GPIO_IN);
-
-    gpio_init(PIR_PIN);
-    gpio_set_dir(PIR_PIN, GPIO_IN);
-}
-
-static void handle_pir_activity(uint32_t current_ms) {
-    bool pir = (bool)gpio_get(PIR_PIN);
-    if (pir) {
-        g_last_pir_ms = current_ms;
-        if (g_tracking_enabled && !g_active) {
-            g_active = true;
-            printf("[PIR] Motion detected - tracking resumed\n");
-            publish_immediate_status(false);
-        }
-    }
-
-    if (g_tracking_enabled && g_active && g_last_pir_ms > 0 &&
-        (current_ms - g_last_pir_ms) > PIR_TIMEOUT_MS) {
-        g_active = false;
-        g_last_pir_ms = 0;
-        printf("[PIR] No motion for %d sec - paused\n", PIR_TIMEOUT_MS / 1000);
-        publish_immediate_status(false);
-    }
 }
 
 static void handle_pushup_detection(float cm, uint32_t current_ms) {
@@ -334,8 +298,6 @@ static void handle_pushup_detection(float cm, uint32_t current_ms) {
     g_daily_sets++;
     g_reps = 0;
     g_set_end_ms = current_ms;
-    g_active = false;
-    g_last_pir_ms = 0;
 
     publish_rest_state(DEFAULT_REST_SEC);
     publish_immediate_status(true);
@@ -467,8 +429,6 @@ static void publish_periodic_updates(uint32_t current_ms, periodic_state_t *stat
 }
 
 static void poll_inputs_and_motion(uint32_t current_ms) {
-    handle_pir_activity(current_ms);
-
     float cm = hcsr04_read_cm();
     if (g_tracking_enabled) {
         handle_pushup_detection(cm, current_ms);
