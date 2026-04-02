@@ -1,5 +1,0 @@
-/Users/chanpark/fitness-pico/Fit-pico/build-lan/pioasm-install/pioasm/pioasm
-/Users/chanpark/fitness-pico/Fit-pico/build-lan/pioasm-install/pioasm/pioasmTargets.cmake
-/Users/chanpark/fitness-pico/Fit-pico/build-lan/pioasm-install/pioasm/pioasmTargets-release.cmake
-/Users/chanpark/fitness-pico/Fit-pico/build-lan/pioasm-install/pioasm/pioasmConfig.cmake
-/Users/chanpark/fitness-pico/Fit-pico/build-lan/pioasm-install/pioasm/pioasmConfigVersion.cmake
