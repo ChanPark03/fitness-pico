@@ -17,10 +17,8 @@
 
 #define HTTP_PORT 80
 #define HTTP_REQ_BUF_SIZE 768
-#define HTTP_POLL_INTERVAL_MS 500
 #define DASHBOARD_HOSTNAME "fitpico-dashboard"
 #define SPEED_HISTORY 5
-#define BOARD_OFFLINE_TIMEOUT_SEC (BOARD_OFFLINE_TIMEOUT_MS / 1000)
 
 static mqtt_client_t *g_mqtt_client = NULL;
 static bool g_mqtt_ready = false;
@@ -404,8 +402,18 @@ static err_t http_send_response(struct tcp_pcb *tpcb, const char *status_line,
     return tcp_output(tpcb);
 }
 
+static err_t http_send_checked_response(struct tcp_pcb *tpcb, const char *status_line,
+                                        const char *content_type, const char *body) {
+    err_t err = http_send_response(tpcb, status_line, content_type, body);
+    if (err != ERR_OK) {
+        printf("[HTTP] 응답 전송 실패 (%d, %s)\n", err, status_line);
+    }
+    return err;
+}
+
 static err_t http_send_not_found(struct tcp_pcb *tpcb) {
-    return http_send_response(tpcb, "404 Not Found", "text/plain; charset=utf-8", "Not Found");
+    return http_send_checked_response(tpcb, "404 Not Found",
+                                      "text/plain; charset=utf-8", "Not Found");
 }
 
 static err_t http_send_control_result(struct tcp_pcb *tpcb, bool ok, const char *message) {
@@ -413,12 +421,40 @@ static err_t http_send_control_result(struct tcp_pcb *tpcb, bool ok, const char 
     snprintf(body, sizeof(body),
              "{\"ok\":%s,\"error\":\"%s\"}",
              ok ? "true" : "false", message);
-    return http_send_response(
+    return http_send_checked_response(
         tpcb,
         ok ? "200 OK" : "503 Service Unavailable",
         "application/json; charset=utf-8",
         body
     );
+}
+
+static err_t http_send_status(struct tcp_pcb *tpcb) {
+    char json[512];
+    build_status_json(json, sizeof(json));
+    return http_send_checked_response(
+        tpcb, "200 OK", "application/json; charset=utf-8", json
+    );
+}
+
+static err_t http_send_dashboard(struct tcp_pcb *tpcb) {
+    return http_send_checked_response(
+        tpcb, "200 OK", "text/html; charset=utf-8", DASHBOARD_HTML
+    );
+}
+
+static err_t http_finish_response(struct tcp_pcb *tpcb, http_state_t *state, err_t response_err) {
+    if (response_err == ERR_OK) {
+        return http_close(tpcb, state);
+    }
+
+    tcp_arg(tpcb, NULL);
+    tcp_sent(tpcb, NULL);
+    tcp_recv(tpcb, NULL);
+    tcp_err(tpcb, NULL);
+    if (state) free(state);
+    tcp_abort(tpcb);
+    return ERR_ABRT;
 }
 
 static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
@@ -442,25 +478,25 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
         return ERR_OK;
     }
 
+    err_t response_err = ERR_OK;
+
     if (strncmp(state->request, "GET /api/status ", 16) == 0) {
-        char json[512];
-        build_status_json(json, sizeof(json));
-        http_send_response(tpcb, "200 OK", "application/json; charset=utf-8", json);
+        response_err = http_send_status(tpcb);
     } else if (strncmp(state->request, "POST /api/control/start ", 24) == 0) {
-        http_send_control_result(tpcb, publish_control_command("start"),
-                                 g_mqtt_ready ? "" : "mqtt_not_ready");
+        response_err = http_send_control_result(tpcb, publish_control_command("start"),
+                                                g_mqtt_ready ? "" : "mqtt_not_ready");
     } else if (strncmp(state->request, "POST /api/control/stop ", 23) == 0) {
-        http_send_control_result(tpcb, publish_control_command("stop"),
-                                 g_mqtt_ready ? "" : "mqtt_not_ready");
+        response_err = http_send_control_result(tpcb, publish_control_command("stop"),
+                                                g_mqtt_ready ? "" : "mqtt_not_ready");
     } else if (strncmp(state->request, "GET / ", 6) == 0 ||
                strncmp(state->request, "GET /HTTP", 9) == 0 ||
                strncmp(state->request, "GET /index.html ", 16) == 0) {
-        http_send_response(tpcb, "200 OK", "text/html; charset=utf-8", DASHBOARD_HTML);
+        response_err = http_send_dashboard(tpcb);
     } else {
-        http_send_not_found(tpcb);
+        response_err = http_send_not_found(tpcb);
     }
 
-    return http_close(tpcb, state);
+    return http_finish_response(tpcb, state, response_err);
 }
 
 static void http_err(void *arg, err_t err) {
@@ -568,7 +604,6 @@ static void mdns_init_service(void) {
 int main(void) {
     stdio_init_all();
     sleep_ms(2000);
-    srand((unsigned)time_us_32());
 
     printf("=== FitPico Web Dashboard ===\n");
     printf("MQTT 브로커: %s:%d\n", MQTT_BROKER_IP, MQTT_BROKER_PORT);

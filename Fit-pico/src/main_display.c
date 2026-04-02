@@ -1,14 +1,16 @@
 
- /*
+/*
  * 표시 레이아웃 (16×2 문자)
  *   Row 0: R:5  S:2/3 ACTV
  *   Row 1: 1200[ok]TD:45
  *
  * MQTT 구독 토픽
- *   fitpico/sensor/count   → reps, sets, active
+ *   fitpico/sensor/count   → reps, sets, active, tracking
  *   fitpico/sensor/speed   → speed_ms, warn
  *   fitpico/sensor/daily   → total_reps, total_sets
- *   fitpico/sensor/rest    → set, rest_sec
+ *
+ * MQTT 발행 토픽
+ *   fitpico/display/status → display heartbeat
  *
  * 핀 배치
  *   GP4 = SDA (I2C0)
@@ -42,7 +44,6 @@
 
 // PCF8574 → HD44780 비트 배치
 #define LCD_RS  0x01   // P0
-#define LCD_RW  0x02   // P1 (항상 0 = 쓰기)
 #define LCD_EN  0x04   // P2
 #define LCD_BL  0x08   // P3 백라이트
 // D4~D7 = P4~P7 (상위 니블)
@@ -141,8 +142,6 @@ static int  g_speed_rep   = 0;
 static char g_warn[8]     = "---";
 static int  g_daily_reps  = 0;
 static int  g_daily_sets  = 0;
-static int  g_rest_set    = 0;
-static int  g_rest_sec    = 0;
 
 static bool g_dirty = true;
 static bool g_wifi_ready = false;
@@ -346,6 +345,7 @@ static void handle_speed_output(int previous_speed_rep, int current_speed_rep) {
 static void on_publish(void *arg, const char *topic, u32_t tot_len) {
     (void)arg; (void)tot_len;
     strncpy(g_cur_topic, topic, sizeof(g_cur_topic) - 1);
+    g_cur_topic[sizeof(g_cur_topic) - 1] = '\0';
     g_pay_len = 0;
 }
 
@@ -373,9 +373,6 @@ static void on_data(void *arg, const u8_t *data, u16_t len, u8_t flags) {
         g_speed_ms = json_int(g_payload, "speed_ms");
         json_str(g_payload, "warn", g_warn, sizeof(g_warn));
         handle_speed_output(previous_speed_rep, g_speed_rep);
-    } else if (strcmp(g_cur_topic, TOPIC_REST) == 0) {
-        g_rest_set = json_int(g_payload, "set");
-        g_rest_sec = json_int(g_payload, "rest_sec");
     } else if (strcmp(g_cur_topic, TOPIC_DAILY) == 0) {
         g_daily_reps = json_int(g_payload, "total_reps");
         g_daily_sets = json_int(g_payload, "total_sets");
@@ -416,7 +413,6 @@ static void on_connect(mqtt_client_t *client, void *arg,
     mqtt_set_inpub_callback(client, on_publish, on_data, NULL);
     mqtt_subscribe(client, TOPIC_COUNT, 0, on_sub, NULL);
     mqtt_subscribe(client, TOPIC_SPEED, 0, on_sub, NULL);
-    mqtt_subscribe(client, TOPIC_REST, 0, on_sub, NULL);
     mqtt_subscribe(client, TOPIC_DAILY, 0, on_sub, NULL);
 }
 

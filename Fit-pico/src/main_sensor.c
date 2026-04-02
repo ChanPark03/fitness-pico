@@ -77,16 +77,6 @@ static uint32_t now_ms(void) {
     return to_ms_since_boot(get_absolute_time());
 }
 
-static int json_int(const char *json, const char *key) {
-    char search[32];
-    snprintf(search, sizeof(search), "\"%s\":", key);
-    const char *p = strstr(json, search);
-    if (!p) return 0;
-    p += strlen(search);
-    while (*p == ' ') p++;
-    return atoi(p);
-}
-
 static void json_str(const char *json, const char *key, char *out, int sz) {
     char search[32];
     snprintf(search, sizeof(search), "\"%s\":\"", key);
@@ -213,7 +203,7 @@ static void publish_all(void) {
            g_daily_reps, g_daily_sets);
 }
 
-static void start_tracking_session(uint32_t current_ms) {
+static void start_tracking_session(void) {
     bool new_session = should_start_new_session();
     if (new_session) {
         reset_session_progress();
@@ -233,7 +223,7 @@ static void start_tracking_session(uint32_t current_ms) {
     printf("[CONTROL] Tracking %s\n", new_session ? "started (new session)" : "resumed");
 }
 
-static void stop_tracking_session(uint32_t current_ms) {
+static void stop_tracking_session(void) {
     g_tracking_enabled = false;
     g_manual_stop = true;
     g_active = false;
@@ -347,12 +337,13 @@ static void handle_pushup_detection(float cm, uint32_t current_ms) {
 }
 
 static void handle_control_command(const char *command, uint32_t current_ms) {
+    (void)current_ms;
     if (strcmp(command, "start") == 0) {
-        start_tracking_session(current_ms);
+        start_tracking_session();
         return;
     }
     if (strcmp(command, "stop") == 0) {
-        stop_tracking_session(current_ms);
+        stop_tracking_session();
         return;
     }
 

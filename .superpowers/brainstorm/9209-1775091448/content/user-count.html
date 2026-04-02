@@ -1,0 +1,21 @@
+<h2>사용자 수와 저장 방식</h2>
+<p class="subtitle">몇 명이 이 기기를 사용하나요?</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>소수 고정 (2~5명)</h3>
+      <p>팀원들이 카드를 미리 등록해두고 사용</p>
+      <p style="margin-top:8px;font-size:13px;color:#888;">카드 UID → 이름 매핑을 코드에 하드코딩. 단순하고 빠름.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>동적 등록 (대시보드에서 추가)</h3>
+      <p>웹 대시보드에서 "새 카드 등록" → 이름 입력 → 저장</p>
+      <p style="margin-top:8px;font-size:13px;color:#888;">카드 UID + 이름을 Pico 플래시에 저장. 재시작해도 유지.</p>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,42 @@
+<h2>구현 방식 선택</h2>
+<p class="subtitle">RFID + 사용자 통계를 어느 보드에서 처리할까요?</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Sensor 보드에 RFID 연결 <span style="font-size:12px;color:#4caf50;">★ 추천</span></h3>
+      <p>MFRC522 → Sensor 보드(SPI) → MQTT로 UID 발행 → Dashboard가 사용자 매핑 처리</p>
+      <div style="margin-top:10px;">
+        <div style="color:#4caf50;font-size:13px;">✓ 배선 단순 (Sensor 보드 근처에 리더기 설치)</div>
+        <div style="color:#4caf50;font-size:13px;">✓ Dashboard가 모든 사용자 데이터 중앙 관리</div>
+        <div style="color:#4caf50;font-size:13px;">✓ 플래시 저장도 Dashboard 보드 한 곳에서만</div>
+        <div style="color:#e57373;font-size:13px;">✗ Sensor 보드 코드가 조금 늘어남</div>
+      </div>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Dashboard 보드에 RFID 연결</h3>
+      <p>MFRC522 → Dashboard 보드(SPI) → 직접 UID 읽어서 사용자 전환</p>
+      <div style="margin-top:10px;">
+        <div style="color:#4caf50;font-size:13px;">✓ MQTT 토픽 추가 없음</div>
+        <div style="color:#e57373;font-size:13px;">✗ Dashboard 보드가 HTTP + MQTT + SPI RFID 동시 처리</div>
+        <div style="color:#e57373;font-size:13px;">✗ 리더기가 대시보드 보드 위치에 고정됨</div>
+      </div>
+    </div>
+  </div>
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>별도 4번째 보드로 분리</h3>
+      <p>RFID 전용 Pico를 추가 → MQTT로 UID만 발행</p>
+      <div style="margin-top:10px;">
+        <div style="color:#4caf50;font-size:13px;">✓ 역할 분리가 가장 깔끔</div>
+        <div style="color:#e57373;font-size:13px;">✗ Pico 보드 1개 추가 필요</div>
+        <div style="color:#e57373;font-size:13px;">✗ 4일 프로젝트에 과함</div>
+      </div>
+    </div>
+  </div>
+</div>

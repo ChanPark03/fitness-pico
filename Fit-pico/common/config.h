@@ -1,7 +1,13 @@
 #pragma once
 
 // ─── MQTT 브로커 ────────────────────────────────────────────────────────────
+#ifndef MQTT_BROKER_IP
+#ifdef MQTT_SERVER
+#define MQTT_BROKER_IP    MQTT_SERVER
+#else
 #define MQTT_BROKER_IP    "163.152.213.101"
+#endif
+#endif
 #define MQTT_BROKER_PORT  1883
 
 // ─── MQTT 토픽 ──────────────────────────────────────────────────────────────
