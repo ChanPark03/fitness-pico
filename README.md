@@ -132,3 +132,5 @@ cmake --build build/fitpico --target \
 | --- | --- | --- | --- |
 | **04.03** | **전체** | **오전** |  |
 |  |  | **오후** |  |
+
+구글 슬라이드 :https://docs.google.com/presentation/d/172OOGbRwKreQsPnrDDnOxR9YNFXfiEyQ71dwK4_FWjc/edit?usp=sharing
